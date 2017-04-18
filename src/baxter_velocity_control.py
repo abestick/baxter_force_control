@@ -11,21 +11,10 @@ import tf.transformations
 import tf
 from sensor_msgs.msg import PointCloud
 
-LIMB = 'left'
-WRENCH = [10,0,0,0,0,0]
-VEL_COMMAND = [0, 0, -0.1, 0, 0, 0]
-MAX_JOINT_VEL = 1.5
-MAX_NS_JOINT_VEL = 0.5
+MAX_JOINT_VEL = 1.5 # Max commanded joint velocity
+MAX_NS_JOINT_VEL = 0.5 # Max nullspace joint velocity
 
-# NEUTRAL = {'left': 
-#         {'left_w0': -0.09625729443980971,
-#          'left_w1': -0.7029466960484908,
-#          'left_w2': 0.03528155812136451,
-#          'left_e0': 0.057524279545703015,
-#          'left_e1': 1.131694326262464,
-#          'left_s0': -0.8736020587007431,
-#          'left_s1': -0.4670971499111085}}
-
+# Arm neutral configs
 NEUTRAL = {'left': 
         {'left_w0': 0.0,
          'left_w1': -0.55,
@@ -44,12 +33,25 @@ NEUTRAL = {'left':
          'right_s1': 0.0}}
 
 class EndpointVelocityController():
+    """Generates joint velocity commands to produce a specified endpoint velocity for one of
+    Baxter's arms.
+
+    Args:
+    limb: 'left'|'right'
+    """
+
     def __init__(self, limb):
         self._neutral_config = NEUTRAL[limb]
         self._kin = baxter_kinematics(limb)
         self._limb = baxter_interface.Limb(limb)
 
     def set_endpoint_velocity(self, velocity_cmd):
+        """Sends joint velocity commands to produce the instantaneous endpoint velocity specified
+        by velocity_cmd
+
+        Args:
+        velocity_cmd: (6,) ndarray - the desired endpoint velocity [x', y', z', r', p' y']
+        """
         # Neutral position return velocity
         # Compute nullspace velocities
         velocity_dict = {joint: self._neutral_config[joint] - self._limb.joint_angle(joint) for joint in self._limb.joint_names()}
@@ -79,9 +81,21 @@ class EndpointVelocityController():
         self._limb.set_joint_velocities(velocity_dict)
 
     def set_neutral_config(self, neutral_config_dict):
+        """Sets the arm's neutral configuration to something other than the default value.
+
+        Args:
+        neutral_config_dict: dict - {'left_s1':value, ..., 'left_w2':value}
+        """
         self._neutral_config = neutral_config_dict
 
 class ContinuousEndpointPoseController():
+    """A closed loop endpoint pose controller which uses joint velocity commands to move the
+    specified limb's endpoint to the desired pose.
+
+    Args:
+    limb: 'left'|'right'
+    """
+
     def __init__(self, limb):
         self._limb = baxter_interface.Limb(limb)
         self._vel_controller = EndpointVelocityController(limb)
@@ -103,13 +117,16 @@ class ContinuousEndpointPoseController():
         self.start()
 
     def stop(self):
+        #Stop the controller
         self._run = False
 
     def start(self):
+        #Start the controller
         self._run = True
         threading.Thread(target=self._run_controller).start()
 
     def _update_endpoint_velocity(self):
+        # Measures the current endpoint pose error and commands a new set of joint velocities
         CONTROL_DOFS = ['x', 'y', 'z', 'rpy']
         IGNORE_DOFS = []#'roll', 'pitch', 'yaw']
         current_ee_vel = {dof: 0.0 for dof in CONTROL_DOFS}
@@ -130,16 +147,38 @@ class ContinuousEndpointPoseController():
             rate.sleep()
 
     def update_position_setpoint(self, setpoint):
+        """Sets the endpoint position setpoint to a new value. Right now orientation is not
+        supported. The controller just maintains the endpoint orientation that it measured when
+        it was initialized.
+
+        Args:
+        setpoint: (3,) ndarray - the desired endpoint position [x, y, z]
+        """
         self._position_setpoint = setpoint
         for i, dof in enumerate(['x', 'y', 'z']):
             self._dof_controllers[dof].set_desired_value(setpoint[i])
 
 def null(a, rtol=1e-5):
+    """ Computes the nullspace of a
+
+    Returns:
+    rank: the rank of the matrix (# of dims with singular values > rtol)
+    nullspace: basis vectors for the nullspace
+    """
     u, s, v = npla.svd(a)
     rank = (s > rtol*s[0]).sum()
     return rank, v[rank:].T.copy()
 
 def project_to_nullspace(nullspace, joint_order, joint_velocities):
+    """Projects a dict of joint velocities into the nullspace of a manipulator. The resulting
+    joint velocity dict will not produce any endpoint motion of the arm.
+
+    Args:
+    nullspace: basis vectors for the nullspace returned from null()
+    joint_order: list - the order in which joints are represented in the Jacobian
+        ['left_s1', ...,'left_w2']
+    joint_velocities: dict - input joint velocities to project
+    """
     # Make a vector of joint velocities
     velocities = np.array([joint_velocities[joint] for joint in joint_order])
 
@@ -152,6 +191,12 @@ def project_to_nullspace(nullspace, joint_order, joint_velocities):
     return {joint: proj_velocities[i] for i, joint in enumerate(joint_order)}
 
 class MocapPointTracker:
+    """Moves both of Baxter's arms to maintain a constant position relative to a single motion
+    capture marker.
+
+    Args:
+    vel_controller_left/vel_controller_right: the ContinuousEndpointPoseControllers for each arm
+    """
     def __init__(self, vel_controller_left, vel_controller_right):
         self._vel_controller_left = vel_controller_left
         self._vel_controller_right = vel_controller_right
@@ -160,6 +205,11 @@ class MocapPointTracker:
         self._position_offset_right = None
 
     def new_frame_callback(self, message):
+        """Called for each new sensor_msgs/PointCloud message received from the mocap system
+
+        Args:
+        message: the PointCloud message object
+        """
         try:
             message = self._tf_listener.transformPointCloud('/base', message)
             data = point_cloud_to_array(message)
@@ -176,6 +226,7 @@ class MocapPointTracker:
             print("Couldn't find the mocap transformation")
 
 def point_cloud_to_array(message):
+    # Converts a sensor_msgs/PointCloud to a (num_markers, 3, 1) ndarray
     num_points = len(message.points)
     data = np.empty((num_points, 3, 1))
     for i, point in enumerate(message.points):
@@ -189,9 +240,6 @@ def main():
     tracker = MocapPointTracker(vel_controller_left, vel_controller_right)
     sub = rospy.Subscriber('/mocap_point_cloud', PointCloud, tracker.new_frame_callback)
     rospy.spin()
-
-
-    
 
 if __name__ == "__main__":
     main()
