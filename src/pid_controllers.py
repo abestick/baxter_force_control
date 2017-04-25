@@ -1,4 +1,4 @@
-from tf.transformations import quaternion_multiply, quaternion_inverse, euler_from_quaternion
+from tf.transformations import quaternion_multiply, quaternion_inverse, euler_from_quaternion, quaternion_from_euler
 import numpy as np
 
 class PidController:
@@ -7,19 +7,35 @@ class PidController:
         self.k_i = k_i
         self.k_d = k_d
 
-        self.desired_value = None
+    def get_control_cmd(self, cur_value, cur_derivative, reference):
+        control_cmd = self.k_p * (reference - cur_value)
+        control_cmd += -self.k_d * cur_derivative
+        return control_cmd
 
-    def set_desired_value(self, value):
-        self.desired_value = value
-        return self
 
-    def get_control_cmd(self, cur_value, cur_derivative):
-        if self.desired_value is not None:
-            control_cmd = self.k_p * (self.desired_value - cur_value)
-            control_cmd += -self.k_d * cur_derivative
-            return control_cmd
-        else:
-            return 0.0
+class PositionPidController:
+    def __init__(self, k_p=(0.0, 0.0, 0.0), k_i=(0.0, 0.0, 0.0), k_d=(0.0, 0.0, 0.0)):
+        if not isinstance(k_p, (tuple, list)):
+            k_p = (k_p,)*3
+
+        if not isinstance(k_i, (tuple, list)):
+            k_i = (k_i,)*3
+
+        if not isinstance(k_d, (tuple, list)):
+            k_d = (k_d,)*3
+
+
+        pid = zip(k_p, k_i, k_d)
+
+        self.x = PidController(*pid[0])
+        self.y = PidController(*pid[1])
+        self.z = PidController(*pid[2])
+
+    def get_control_cmd(self, cur_value, cur_derivative, reference):
+        x, y, z = zip(cur_value, cur_derivative, reference)
+
+        return [self.x.get_control_cmd(*x), self.y.get_control_cmd(*y), self.z.get_control_cmd(*z)]
+
 
 class OrientationPidController:
     def __init__(self, k_p=0.0, k_i=0.0, k_d=0.0):
@@ -27,17 +43,12 @@ class OrientationPidController:
         self.k_i = k_i
         self.k_d = k_d
 
-        self.desired_value = None
+    def get_control_cmd(self, cur_value, reference, eular=False):
 
-    def set_desired_value(self, desired_quaternion):
-        self.desired_value = desired_quaternion
-        return self
+        if eular:
+            reference = quaternion_from_euler(*reference)
 
-    def get_control_cmd(self, cur_value, cur_derivative):
-        if self.desired_value is not None:
-            quaternion_diff = quaternion_multiply(self.desired_value, quaternion_inverse(cur_value))
-            euler_diff = np.array(euler_from_quaternion(quaternion_diff))
-            control_cmd = self.k_p * euler_diff
-            return control_cmd
-        else:
-            return [0.0, 0.0, 0.0]
+        quaternion_diff = quaternion_multiply(reference, quaternion_inverse(cur_value))
+        euler_diff = np.array(euler_from_quaternion(quaternion_diff))
+        control_cmd = self.k_p * euler_diff
+        return list(control_cmd)
