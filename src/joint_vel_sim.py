@@ -7,10 +7,20 @@ from geometry_msgs.msg import Pose
 from copy import copy
 from std_srvs.srv import Empty, EmptyResponse
 from std_msgs.msg import Header
-from baxter_core_msgs.msg import EndpointState
+from baxter_core_msgs.msg import EndpointState, JointCommand
 
 
-class JointvelocityRelay():
+class LeftRightSubscriber(object):
+
+    def __init__(self, prefix, suffix, message_type, cb):
+        self.sub_l = rospy.Subscriber(prefix + '/left/' + suffix, message_type, cb)
+        self.sub_r = rospy.Subscriber('/robot/limb/right/joint_command', message_type, cb)
+
+    def unregister(self):
+        self.sub_l.unregister()
+        self.sub_r.unregister()
+
+class JointVelocityRelay():
 
     name = ['head_pan', 'right_s0', 'right_s1', 'right_e0', 'right_e1', 'right_w0', 'right_w1',
                                   'right_w2', 'left_s0', 'left_s1', 'left_e0', 'left_e1', 'left_w0', 'left_w1',
@@ -25,6 +35,8 @@ class JointvelocityRelay():
                            name=name)
 
     def __init__(self, rate=100):
+        self.sub = None
+        self.timer = None
         self.vel_control = True
         rospy.set_param("~vel_control", self.vel_control)
         self.rate = rate
@@ -54,6 +66,10 @@ class JointvelocityRelay():
         return EmptyResponse()
 
     def vel_init(self):
+        self.sub = LeftRightSubscriber('/robot/limb', 'joint_command', JointCommand, self.update_vel)
+        self.timer = rospy.Timer(rospy.Duration(1.0 / self.rate), self.publish_vel)
+
+    def vel_init_states(self):
         self.sub = rospy.Subscriber('~joint_states/vel', JointState, self.update_vel)
         self.timer = rospy.Timer(rospy.Duration(1.0 / self.rate), self.publish_vel)
 
@@ -71,6 +87,10 @@ class JointvelocityRelay():
         self.pub.publish(self.current)
 
     def update_vel(self, msg):
+        for command, name in zip(msg.command, msg.names):
+            self.current.velocity[self.current.name.index(name)] = command
+
+    def update_vel_states(self, msg):
         self.current.velocity = np.array(msg.velocity)
 
     def publish_pos(self, event):
@@ -97,7 +117,6 @@ class JointvelocityRelay():
         left_msg = EndpointState(header=left.header, pose=transform_to_pose(left.transform))
         right_msg = EndpointState(header=right.header, pose=transform_to_pose(right.transform))
 
-
         self.left_endpoint_pub.publish(left_msg)
         self.right_endpoint_pub.publish(right_msg)
 
@@ -117,7 +136,7 @@ def transform_to_pose(transform):
 def main():
     rospy.init_node('joint_vel_sim')
     rate = rospy.get_param('~rate', 100)
-    relay = JointvelocityRelay(rate)
+    relay = JointVelocityRelay(rate)
     rospy.spin()
 
 if __name__ == "__main__":

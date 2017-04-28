@@ -29,7 +29,7 @@
 
         <joint name="joint_1" type="revolute">
             <axis xyz="0 1 0"/>
-            <limit effort="1000.0" lower="0.0" upper="0.548" velocity="0.5"/>
+            <limit effort="1000.0" lower="-2.96705973" upper="2.96705973" velocity="0.5"/>
             <origin rpy="0 0 0" xyz="${length/(joints+1)} 0.0 0"/>
             <parent link="base_link"/>
             <child link="link_1"/>
@@ -50,7 +50,7 @@
 
         <joint name="joint_2" type="revolute">
             <axis xyz="0 1 0"/>
-            <limit effort="1000.0" lower="0.0" upper="0.548" velocity="0.5"/>
+            <limit effort="1000.0" lower="-2.96705973" upper="2.96705973" velocity="0.5"/>
             <origin rpy="0 0 0" xyz="${length/(joints+1)} 0.0 0"/>
             <parent link="link_1"/>
             <child link="link_2"/>
@@ -71,7 +71,7 @@
 
         <joint name="joint_3" type="revolute">
             <axis xyz="0 1 0"/>
-            <limit effort="1000.0" lower="0.0" upper="0.548" velocity="0.5"/>
+            <limit effort="1000.0" lower="-2.96705973" upper="2.96705973" velocity="0.5"/>
             <origin rpy="0 0 0" xyz="${length/(joints+1)} 0.0 0"/>
             <parent link="link_2"/>
             <child link="link_3"/>
@@ -92,7 +92,7 @@
 
         <joint name="joint_4" type="revolute">
             <axis xyz="0 1 0"/>
-            <limit effort="1000.0" lower="0.0" upper="0.548" velocity="0.5"/>
+            <limit effort="1000.0" lower="-2.96705973" upper="2.96705973" velocity="0.5"/>
             <origin rpy="0 0 0" xyz="${length/(joints+1)} 0.0 0"/>
             <parent link="link_3"/>
             <child link="link_4"/>
@@ -113,7 +113,7 @@
 
         <joint name="joint_5" type="revolute">
             <axis xyz="0 1 0"/>
-            <limit effort="1000.0" lower="0.0" upper="0.548" velocity="0.5"/>
+            <limit effort="1000.0" lower="-2.96705973" upper="2.96705973" velocity="0.5"/>
             <origin rpy="0 0 0" xyz="${length/(joints+1)} 0.0 0"/>
             <parent link="link_4"/>
             <child link="link_5"/>

@@ -9,6 +9,7 @@ import pid_controllers
 from std_msgs.msg import Float32MultiArray
 from tf.transformations import quaternion_from_euler
 
+
 MAX_JOINT_VEL = 1.5 # Max commanded joint velocity
 MAX_NS_JOINT_VEL = 0.5 # Max nullspace joint velocity
 

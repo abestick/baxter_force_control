@@ -1,0 +1,91 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="cardboard">
+
+    <xacro:property name="length" value=".60" />
+    <xacro:property name="width" value=".30" />
+    <xacro:property name="height" value=".30" />
+    <xacro:property name="flap_length" value=".30" />
+    <xacro:property name="thickness" value=".005" />
+    <xacro:property name="deg180" value="3.1415926535897931" />
+    <xacro:property name="deg90" value="1.5707963267948966" />
+
+    <link name="base_link">
+    <visual>
+        <geometry>
+            <box size="0 0 0"/>
+        </geometry>
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+    </visual>
+    </link>
+
+    <link name="human">
+    <visual>
+        <geometry>
+            <box size="0 0 0"/>
+        </geometry>
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+    </visual>
+    </link>
+
+    <link name="box">
+    <visual>
+        <geometry>
+            <box size="${length} ${width} ${height}"/>
+        </geometry>
+        <origin rpy="0 0 0" xyz="${length/2} 0 ${-height/2}"/>
+    </visual>
+    </link>
+
+    <link name="flap_1">
+        <visual>
+            <geometry>
+                <box size="${flap_length} ${width} ${thickness}"/>
+            </geometry>
+            <origin rpy="0 0 0" xyz="${flap_length/2} 0 0"/>
+            <material name="blue">
+                <color rgba="0 0 .8 1"/>
+            </material>
+        </visual>
+    </link>
+
+    <link name="flap_2">
+        <visual>
+            <geometry>
+                <box size="${flap_length} ${width} ${thickness}"/>
+            </geometry>
+            <origin rpy="0 0 0" xyz="${flap_length/2} 0 0"/>
+            <material name="blue">
+                <color rgba="0 0 .8 1"/>
+            </material>
+        </visual>
+    </link>
+
+    <joint name="joint_0" type="fixed">
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <parent link="base_link"/>
+        <child link="flap_1"/>
+    </joint>
+
+    <joint name="joint_1" type="revolute">
+        <axis xyz="0 1 0"/>
+        <limit effort="1000.0" lower="${-deg180}" upper="${deg90}" velocity="0.5"/>
+        <origin rpy="0 0 0" xyz="${flap_length} 0 0"/>
+        <parent link="flap_1"/>
+        <child link="box"/>
+    </joint>
+
+    <joint name="joint_2" type="revolute">
+        <axis xyz="0 1 0"/>
+        <limit effort="1000.0" lower="${-deg180}" upper="${deg90}" velocity="0.5"/>
+        <origin rpy="0 0 0" xyz="${length} 0 0"/>
+        <parent link="box"/>
+        <child link="flap_2"/>
+    </joint>
+
+    <joint name="joint_3" type="fixed">
+        <origin rpy="0 0 0" xyz="${flap_length} 0 0"/>
+        <parent link="flap_2"/>
+        <child link="human"/>
+    </joint>
+
+</robot>
