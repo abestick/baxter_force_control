@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="cardboard">
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="baxter_box">
 
     <xacro:include filename="box_chain.urdf.xacro"/>
 
