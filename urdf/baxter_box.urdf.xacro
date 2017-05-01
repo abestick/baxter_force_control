@@ -9,8 +9,8 @@
     <xacro:box_description base_link="false" />
 
     <joint name="joint_baxter_box" type="fixed">
-        <origin rpy="0 0 0" xyz="0 0 0"/>
-        <parent link="l_gripper_l_finger_tip"/>
+        <origin rpy="0 ${-deg90} ${deg90}" xyz="0 0 0"/>
+        <parent link="l_gripper_l_finger"/>
         <child link="grip_point"/>
     </joint>
 

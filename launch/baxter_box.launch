@@ -27,7 +27,7 @@
   </node>
 
   <!-- Show in Rviz   -->
-  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find baxter_description)/launch/baxter.rviz"/>
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find baxter_force_control)/launch/baxter_box.rviz"/>
 
   <!-- Fake transform from world origin to robot origin (base) -->
   <node pkg="tf" type="static_transform_publisher" name="$(anon tf)" args="0 0 0 0 0 0 /world /base 30" />
