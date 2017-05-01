@@ -1,18 +1,20 @@
 #!/usr/bin/python
 import rospy
 import baxter_interface
+import argparse
 from baxter_pykdl import baxter_kinematics
 import numpy as np
 import numpy.linalg as npla
 import threading
 import pid_controllers
+import phasespace.load_mocap as load_mocap
+import kinmodel
 from std_msgs.msg import Float32MultiArray
 from tf.transformations import quaternion_from_euler
 from tools import multidot
-from pykdl_utils.kdl_kinematics import KDLKinematics
-from urdf_parser_py.urdf import URDF
 from tools import colvec, array_squared
 from sensor_msgs.msg import JointState
+from track_kinmodel import KinematicTreeTracker, KinematicTreeExternalFrameTracker
 
 MAX_JOINT_VEL = 1.5  # Max commanded joint velocity
 MAX_NS_JOINT_VEL = 0.5  # Max nullspace joint velocity
@@ -214,7 +216,7 @@ class EndpointVelocityController():
         # End effector command velocity
         # Compute the joint velocity commands
         joint_velocity_command, feasible = self._nullspace_projector.direct_cascaded_pose(velocity_cmd, secondary)
-
+        rospy.logdebug("joint command: " + str(joint_velocity_command.flatten()))
         # if we are stuck in a singularity, reverse the last command in order to get us out
         if feasible == 0:
             self._limb.set_joint_velocities(self._last_velocity_cmd)
@@ -264,7 +266,7 @@ class ContinuousEndpointPoseController():
     limb: 'left'|'right'
     """
 
-    def __init__(self, limb, rate=100):
+    def __init__(self, limb, get_jacobian, configuration_ref, k_p=1.0, rate=100, box_joints_topic=None):
         self.rate = rate
         self._limb = baxter_interface.Limb(limb)
         self._vel_controller = EndpointVelocityController(limb, rate)
@@ -275,7 +277,8 @@ class ContinuousEndpointPoseController():
         self._position_setpoint = tuple(self._limb.endpoint_pose()['position'])
 
         # Create the controllers for the config
-        self._config_kinematics = ObjectConfigKinematics(None, None, None)
+        self._config_kinematics = ObjectConfigKinematics(get_jacobian, configuration_ref, k_p, box_joints_topic)
+        self._config_kinematics.set_dynamic_configuration_ref('configuration_ref')
 
         # Start the velocity control loop
         self.start()
@@ -287,13 +290,15 @@ class ContinuousEndpointPoseController():
     def start(self):
         # Start the controller
         self._run = True
-        threading.Thread(target=self._run_controller).start()
+        t = threading.Thread(target=self._run_controller)
+        t.daemon = True
+        t.start()
 
     def _update_endpoint_velocity(self):
         # Get the endpoint veloctiy to close the error between current joint angles and config
         velocity_cmd = self._config_kinematics.compute_optimal_robot_effector_velocity()
 
-        rospy.logdebug("command: " + str(velocity_cmd.flatten()))
+        rospy.logdebug("pose command:  " + str(velocity_cmd.flatten()))
         self._vel_controller.set_endpoint_velocity(velocity_cmd)
         # self._vel_controller.set_endpoint_velocity([.0, 0.0, -0.05] + [0.0]*3, True)
 
@@ -306,7 +311,7 @@ class ContinuousEndpointPoseController():
 
 class ObjectConfigKinematics():
 
-    def __init__(self, get_jacobian, configuration_ref, forward_kinematics=None):
+    def __init__(self, get_jacobian, configuration_ref, k_p=1.0, box_joints_topic=None, forward_kinematics=None):
         """
         Class which computes kinematics on an object relative to the robots grip on it and a desired configuration
         :param get_jacobian: a function handle which returns the current objects jacobian, takes no arguments
@@ -314,16 +319,21 @@ class ObjectConfigKinematics():
         :param forward_kinematics: a function handle which computes the forward kinematics from a joint array
         """
 
+        if box_joints_topic is None:
+            box_joints_topic = 'box/joint_states'
+
+        self.k_p = k_p
+
         # copy across member variables
         self.get_jacobian = get_jacobian
         self.configuration_ref = colvec(configuration_ref)
         self.forward_kinematics = forward_kinematics
 
         # block until we get out first joint update
-        self.joints = colvec(rospy.wait_for_message('box/joint_angles', JointState).position)
+        self.joints = colvec(rospy.wait_for_message(box_joints_topic, JointState).position)
 
         # set up a subscriber to this joint topic
-        self.sub_joints = rospy.Subscriber('box/joint_angles', JointState, self._update_joints)
+        self.sub_joints = rospy.Subscriber(box_joints_topic, JointState, self._update_joints)
 
         # placeholder for a reference subscriber
         self.sub_config = None
@@ -355,17 +365,49 @@ class ObjectConfigKinematics():
         Computes the optimal velocity end effector in order to close the error from the configuration reference
         :return: 
         """
-        return npla.pinv(self.get_jacobian).dot(self.configuration_ref - self.joints)
+        return self.get_jacobian().dot(self.k_p*(self.configuration_ref - self.joints))
 
+
+def setup_trackers(box_joints_topic):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('kinmodel_json_optimized', help='The kinematic model JSON file')
+    # parser.add_argument('mocap_npz')
+    args = parser.parse_args()
+
+    #Load the calibration sequence
+    # calib_data = np.load(args.mocap_npz)
+    # ukf_mocap = load_mocap.MocapArray(calib_data['full_sequence'][:,:,:], FRAMERATE)
+
+    # Load the mocap stream
+    ukf_mocap = load_mocap.PointCloudStream('/mocap_point_cloud')
+    tracker_kin_tree = kinmodel.KinematicTree(json_filename=args.kinmodel_json_optimized)
+    kin_tree = kinmodel.KinematicTree(json_filename=args.kinmodel_json_optimized)
+
+
+    # Add the external frames to track
+    frame_tracker = KinematicTreeExternalFrameTracker(kin_tree, 'object_base')
+    frame_tracker.attach_frame('joint2', 'trans2')
+    frame_tracker.attach_frame('joint3', 'trans3')
+    frame_tracker.attach_tf_frame('joint3', 'left_hand')
+    frame_tracker.attach_tf_frame('joint2', 'base')
+
+    def new_frame_callback(i, joint_angles):
+        frame_tracker.set_config({'joint2':joint_angles[0], 'joint3':joint_angles[1]})
+
+    tracker = KinematicTreeTracker(tracker_kin_tree, ukf_mocap, joint_states_topic=box_joints_topic,
+            object_tf_frame='/object_base', new_frame_callback=new_frame_callback)
+    # ukf_output = tracker.run()
+    
+
+    return tracker, frame_tracker
 
 def main():
     rospy.init_node('baxter_velocity_control', log_level=rospy.DEBUG)
+    tracker, frame_tracker = setup_trackers('/box/joint_states')
+    tracker.start()
+
     rate = rospy.get_param('~rate', 100)
-    # vel_controller_left = ContinuousEndpointPoseController('left', rate)
-    vel_controller_right = ContinuousEndpointPoseController('right', rate)
-    # sub_left = rospy.Subscriber('left/pose/reference', Float32MultiArray, vel_controller_left.update_pose_setpoint_cb)
-    sub_right = rospy.Subscriber('right/pose/reference', Float32MultiArray,
-                                 vel_controller_right.update_pose_setpoint_cb)
+    vel_controller_left = ContinuousEndpointPoseController('left', frame_tracker.compute_jacobian_matrix, np.array([0.2, 0.1]), 0.3, rate)
     rospy.spin()
 
 
