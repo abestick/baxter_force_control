@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="cardboard">
+
+    <xacro:include filename="box_chain.urdf.xacro"/>
+
+    <xacro:include filename="$(find baxter_description)/urdf/baxter.urdf.xacro" ns="baxter"/>
+
+
+    <xacro:box_description base_link="false" />
+
+    <joint name="joint_baxter_box" type="fixed">
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <parent link="l_gripper_l_finger_tip"/>
+        <child link="grip_point"/>
+    </joint>
+
+</robot>

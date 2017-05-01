@@ -37,7 +37,7 @@ class JointVelocityRelay():
     def __init__(self, rate=100):
         self.sub = None
         self.timer = None
-        self.vel_control = True
+        self.vel_control = rospy.get_param('~vel_control', True)
         rospy.set_param("~vel_control", self.vel_control)
         self.rate = rate
         self.current = copy(self.start_pos)
@@ -48,7 +48,11 @@ class JointVelocityRelay():
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         self.endpoint_sub = rospy.Subscriber('tf', TFMessage, self.publish_endpoints)
-        self.vel_init()
+        if self.vel_control:
+            self.vel_init()
+        else:
+            self.pos_init()
+
         rospy.loginfo("Initialization complete.")
 
     def switch(self, req):
@@ -98,16 +102,19 @@ class JointVelocityRelay():
         self.pub.publish(self.current)
 
     def update_pos(self, msg):
-        current_time = rospy.Time.now()
+        if len(self.current.name) < len(msg.name):
+            self.current.name = msg.name
+            self.current.position = np.append(self.current.position, msg.position[len(self.current.position):])
+
         self.current.velocity = (self.current.position - np.array(msg.position)) / self.timer._period.to_sec()
         self.current.position = np.array(msg.position)
 
     def publish_endpoints(self, msg):
         try:
-            left = self.tf_buffer.lookup_transform('world', 'l_gripper_l_finger',
+            left = self.tf_buffer.lookup_transform('world', 'l_gripper_l_finger_tip',
                                                    self.tf_buffer.get_latest_common_time('world', 'l_gripper_l_finger'))
 
-            right = self.tf_buffer.lookup_transform('world', 'r_gripper_l_finger',
+            right = self.tf_buffer.lookup_transform('world', 'r_gripper_l_finger_tip',
                                                    self.tf_buffer.get_latest_common_time('world', 'r_gripper_l_finger'))
 
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException,
