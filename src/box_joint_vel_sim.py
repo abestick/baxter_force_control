@@ -27,13 +27,13 @@ class JointVelocityRelay():
     name = ['head_pan', 'right_s0', 'right_s1', 'right_e0', 'right_e1', 'right_w0', 'right_w1',
                                   'right_w2', 'left_s0', 'left_s1', 'left_e0', 'left_e1', 'left_w0', 'left_w1',
                                   'left_w2', 'l_gripper_l_finger_joint', 'l_gripper_r_finger_joint',
-                                  'r_gripper_l_finger_joint', 'r_gripper_r_finger_joint', 'joint_1', 'joint_2']
+                                  'r_gripper_l_finger_joint', 'r_gripper_r_finger_joint', 'joint_1', 'joint_2', 'joint_3']
     start_pos = JointState(position=np.array([0.0, -0.535688844727944, -0.0003125999999995521, 0.0,
                                               -0.00010840000000000155, 0.0,-6.462112780614149e-05, 0.0, 0.0,
                                               -0.0003125999999995521, 0.0,-0.00010840000000000155, -1.5708,
-                                              -6.462112780614149e-05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-                           velocity=np.array([0.0]*21),
-                           effort=np.array([0.0]*21),
+                                              -6.462112780614149e-05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+                           velocity=np.array([0.0]*22),
+                           effort=np.array([0.0]*22),
                            name=name)
 
     def __init__(self, rate=100):
@@ -113,7 +113,7 @@ class JointVelocityRelay():
         self.current.position[:19] = np.array(msg.position)[:19]
 
     def update_box_joints(self, msg):
-        self.current.position[19:] = self.kdl_kin.inverse(msg)
+        self.current.position[19:] = self.kdl_kin.inverse(msg, )
 
     def publish_endpoints(self, msg):
         try:
