@@ -13,12 +13,18 @@
   <!-- open joint_state_pub in case we want joint_position_control -->
   <node name="joint_state_publisher" pkg="joint_state_publisher" type="joint_state_publisher">
     <param name="use_gui" value="TRUE"/>
-    <remap from="joint_states" to="joint_vel_sim/joint_states/pos" />
+    <remap from="joint_states" to="box_joint_vel_sim/joint_states/pos" />
   </node>
 
   <!-- Open the realy node which takes partially filled JointState messages and fills in the rest -->
-  <node name="joint_vel_sim" pkg="baxter_force_control" type="joint_vel_sim.py">
+  <node name="box_joint_vel_sim" pkg="baxter_force_control" type="box_joint_vel_sim.py">
     <param name="vel_control" value="false" />
+  </node>
+
+  <!-- Open the realy node which takes partially filled JointState messages and fills in the rest -->
+  <node name="human_grip_publisher" pkg="tf_publisher_gui" type="tf_publisher_gui">
+    <param name="topic" value="box/human_grip" />
+    <param name="frame" value="l_gripper_l_finger" />
   </node>
 
   <!-- Link the robot state publisher to the output of the relay node -->

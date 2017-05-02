@@ -319,7 +319,7 @@ class ObjectConfigKinematics():
         self.configuration_ref = colvec(configuration_ref)
         self.forward_kinematics = forward_kinematics
 
-        # block until we get out first joint update
+        # block until we get our first joint update
         self.joints = colvec(rospy.wait_for_message('box/joint_angles', JointState).position)
 
         # set up a subscriber to this joint topic
