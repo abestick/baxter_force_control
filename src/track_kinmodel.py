@@ -179,6 +179,9 @@ class KinematicTreeExternalFrameTracker(object):
             external_frame_dict[frame_name] = observations[frame_name]
         return external_frame_dict
 
+    def compute_transform(self, base_frame_name, target_frame_name):
+        return self._kin_tree.compute_transform(base_frame_name, target_frame_name)
+
     def compute_jacobian(self, base_frame_name, manip_name_frame):
         self._update()
         return self._kin_tree.compute_jacobian(base_frame_name, manip_name_frame)
@@ -190,6 +193,8 @@ class KinematicTreeExternalFrameTracker(object):
         return np.concatenate([jac_dict[joint_col] for joint_col in order], axis=1)
 
     def _update(self):
+        success = True
+
         # Get the current and zero-config feature observations
         feature_obs = self._kin_tree.observe_features()
         all_features = self._kin_tree.get_features()
@@ -207,6 +212,8 @@ class KinematicTreeExternalFrameTracker(object):
                 updated_features[frame_name] = base_reference_zero_config * (base_reference_trans.inv() * base_robot_trans)
             except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
                 print('Lookup failed for TF frame: ' + frame_name)
+                return False
+
         self._kin_tree.set_features(updated_features)
 
         # Observe and publish specified static features
@@ -215,6 +222,8 @@ class KinematicTreeExternalFrameTracker(object):
             self._tf_pub.sendTransform(obs[0:3,3],
                                     tf.transformations.quaternion_from_matrix(obs),
                                     rospy.Time.now(), frame_name, self._base_frame_name)
+
+        return success
 
 
 def main():

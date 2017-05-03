@@ -278,7 +278,7 @@ class EndpointVelocityController():
         # Compute the joint velocity commands
         joint_velocity_command, feasible = self._nullspace_projector.direct_full_pose(velocity_cmd,
             NEUTRAL_ARRAY - self.get_joint_array())
-        rospy.logdebug("joint command: " + str(joint_velocity_command.flatten()))
+        # rospy.logdebug("joint command: " + str(joint_velocity_command.flatten()))
         # if we are stuck in a singularity, reverse the last command in order to get us out
         if feasible == 0:
             joint_velocity_command = -self._last_velocity_cmd
@@ -328,6 +328,7 @@ class ContinuousEndpointPoseController():
     """
 
     def __init__(self, limb, get_jacobian, configuration_ref, k_conf=1.0, k_grip=1.0, rate=100, box_joints_topic=None):
+        rospy.logdebug('Initializing ContinuousEndpointPoseController')
         self.rate = rate
         self._limb = baxter_interface.Limb(limb)
         self._vel_controller = EndpointVelocityController(limb, rate)
@@ -338,11 +339,13 @@ class ContinuousEndpointPoseController():
         self._position_setpoint = tuple(self._limb.endpoint_pose()['position'])
 
         # Create the controllers for the config
+        rospy.logdebug('Initializing ObjectConfigKinematics')
         self._config_kinematics = ObjectConfigKinematics(get_jacobian, configuration_ref, k_conf, k_grip, box_joints_topic)
         self._config_kinematics.set_dynamic_configuration_ref('configuration_ref')
 
         # Start the velocity control loop
         self.start()
+        rospy.logdebug('ContinuousEndpointPoseController init complete')
 
     def stop(self):
         # Stop the controller
@@ -372,7 +375,7 @@ class ContinuousEndpointPoseController():
 
 class ObjectConfigKinematics():
 
-    def __init__(self, get_jacobian, configuration_ref, k_conf=1.0, k_grip=0.1, box_joints_topic=None, forward_kinematics=None):
+    def __init__(self, frame_tracker, configuration_ref, k_conf=1.0, k_grip=0.1, box_joints_topic=None, forward_kinematics=None):
         """
         Class which computes kinematics on an object relative to the robots grip on it and a desired configuration
         :param get_jacobian: a function handle which returns the current objects jacobian, takes no arguments
@@ -387,7 +390,8 @@ class ObjectConfigKinematics():
         self.k_grip = k_grip
 
         # copy across member variables
-        self.get_jacobian = get_jacobian
+        self._frame_tracker = frame_tracker
+        self.get_jacobian = self._frame_tracker.compute_jacobian_matrix
         self.configuration_ref = colvec(configuration_ref)
         self.forward_kinematics = forward_kinematics
 
@@ -403,6 +407,8 @@ class ObjectConfigKinematics():
         self._tf_listener = tf.TransformListener()
 
         self.optimal_grip_orientation = self.get_grip_transform()
+
+        rospy.logdebug('ObjectConfigKinematics init complete')
 
     def set_dynamic_configuration_ref(self, topic_name):
         """
@@ -431,7 +437,11 @@ class ObjectConfigKinematics():
         Computes the optimal velocity end effector in order to close the error from the configuration reference
         :return: 
         """
-        return colvec(self.get_jacobian().dot(self.k_conf*(self.configuration_ref - self.joints))) + self.k_grip * colvec(self.compute_grip_error())
+        # Perform this before grip correction so that appropriate tf frames are published by the get_jacobian call
+        config_correction = colvec(self.get_jacobian().dot(self.k_conf*(self.configuration_ref - self.joints)))
+        grip_correction = self.k_grip * colvec(self.compute_grip_error())
+        rospy.logdebug('\nconfig_correction: ' + str(config_correction.flatten()) + '\ngrip_correction:   ' + str(grip_correction.flatten()))
+        return config_correction + grip_correction
 
     def compute_grip_error(self):
         euler_rot = self.get_grip_transform()
@@ -442,17 +452,8 @@ class ObjectConfigKinematics():
 
 
     def get_grip_transform(self):
-        found = False
-
-        while not found and not rospy.is_shutdown():
-            try:
-                _, q_rot = self._tf_listener.lookupTransform('trans3', 'left_hand', rospy.Time(0))
-                found = True
-
-            except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
-                rospy.logdebug("Waiting for transform")
-
-        return np.array(tf.transformations.euler_from_quaternion(q_rot)) # , axes='sxyz'
+        homog_transform = self._frame_tracker.compute_transform('trans3', 'left_hand')
+        return np.array(tf.transformations.euler_from_matrix(homog_transform.rot().R()))
 
 
 def setup_trackers(box_joints_topic):
@@ -483,8 +484,7 @@ def setup_trackers(box_joints_topic):
 
     tracker = KinematicTreeTracker(tracker_kin_tree, ukf_mocap, joint_states_topic=box_joints_topic,
             object_tf_frame='/object_base', new_frame_callback=new_frame_callback)
-    # ukf_output = tracker.run()
-    
+    # ukf_output = tracker.run()    
 
     return tracker, frame_tracker
 
@@ -493,9 +493,14 @@ def main():
     tracker, frame_tracker = setup_trackers('/box/joint_states')
     tracker.start()
 
+    rospy.logdebug("Updating frame tracker")
+    while not frame_tracker._update():
+        pass
+
+    rospy.logdebug("Updated.")
+
     rate = rospy.get_param('~rate', 100)
-    raw_input()
-    vel_controller_left = ContinuousEndpointPoseController('left', frame_tracker.compute_jacobian_matrix, np.array([0.2, 0.2]), 0.2, 0.2, rate)
+    vel_controller_left = ContinuousEndpointPoseController('left', frame_tracker, np.array([0.2, 0.2]), 0.2, 0.2, rate)
     rospy.spin()
 
 
