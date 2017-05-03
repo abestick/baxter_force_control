@@ -69,7 +69,9 @@
     <parent link="box_base"/>
     <child link="flap_2"/>
   </joint>
-  <joint name="joint_3" type="fixed">
+  <joint name="joint_3" type="revolute">
+    <axis xyz="0 1 0"/>
+    <limit effort="1000.0" lower="-3.14159265359" upper="3.14159265359" velocity="1.5"/>
     <origin rpy="0 0 0" xyz="0.3 0 0"/>
     <parent link="flap_2"/>
     <child link="human"/>
