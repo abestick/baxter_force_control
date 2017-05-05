@@ -277,7 +277,8 @@ class EndpointVelocityController():
         # End effector command velocity
         # Compute the joint velocity commands
         joint_velocity_command, feasible = self._nullspace_projector.direct_full_pose(velocity_cmd,
-            NEUTRAL_ARRAY - self.get_joint_array())
+            NEUTRAL_ARRAY - NEUTRAL_ARRAY)# self.get_joint_array())
+
         # rospy.logdebug("joint command: " + str(joint_velocity_command.flatten()))
         # if we are stuck in a singularity, reverse the last command in order to get us out
         if feasible == 0:
@@ -362,9 +363,9 @@ class ContinuousEndpointPoseController():
         # Get the endpoint veloctiy to close the error between current joint angles and config
         velocity_cmd = self._config_kinematics.compute_optimal_robot_effector_velocity()
 
-        rospy.logdebug("pose command:  " + str(velocity_cmd.flatten()))
+        rospy.logdebug("\npose command:  " + str(velocity_cmd.flatten()))
         self._vel_controller.set_endpoint_velocity(velocity_cmd)
-        # self._vel_controller.set_endpoint_velocity([.0, 0.0, -0.05] + [0.0]*3, True)
+        # self._vel_controller.set_endpoint_velocity([0.0]*3 + [.0, 0.0, 0.02], True)
 
     def _run_controller(self):
         rate = rospy.Rate(self.rate)
@@ -437,16 +438,26 @@ class ObjectConfigKinematics():
         Computes the optimal velocity end effector in order to close the error from the configuration reference
         :return: 
         """
+        
+        config_error = self.configuration_ref - self.joints
         # Perform this before grip correction so that appropriate tf frames are published by the get_jacobian call
-        config_correction = colvec(self.get_jacobian().dot(self.k_conf*(self.configuration_ref - self.joints)))
-        grip_correction = self.k_grip * colvec(self.compute_grip_error())
-        rospy.logdebug('\nconfig_correction: ' + str(config_correction.flatten()) + '\ngrip_correction:   ' + str(grip_correction.flatten()))
+        config_correction = colvec(self.get_jacobian().dot(-self.k_conf*(config_error)))
+        grip_error = self.compute_grip_error()
+        grip_correction = self.k_grip * colvec(grip_error)
+        rospy.logdebug('\nconfig error     : ' + str(config_error.flatten()) + 
+                       '\ngrip error       : ' + str(grip_error.flatten()[[3, 5]]) + 
+                       '\nconfig correction: ' + str(config_correction.flatten()) +
+                       '\ngrip correction  : ' + str(grip_correction.flatten()))
         return config_correction + grip_correction
 
+
     def compute_grip_error(self):
-        euler_rot = self.get_grip_transform()
+        obj_grip_error = self.optimal_grip_orientation - self.get_grip_transform()
+        obj_grip_error[1] = 0
+        base_grip_error = self._frame_tracker.compute_transform('base', 'trans3').R().dot(colvec(obj_grip_error))[:, 0]
+
         grip_diff = np.zeros(6)
-        grip_diff[3:5] = self.optimal_grip_orientation[:2] - euler_rot[:2]
+        grip_diff[3:] = base_grip_error
 
         return grip_diff
 
@@ -500,7 +511,7 @@ def main():
     rospy.logdebug("Updated.")
 
     rate = rospy.get_param('~rate', 100)
-    vel_controller_left = ContinuousEndpointPoseController('left', frame_tracker, np.array([0.2, 0.2]), 0.2, 0.2, rate)
+    vel_controller_left = ContinuousEndpointPoseController('left', frame_tracker, np.array([0.2, 0.2]), 0.2, 0.4, rate)
     rospy.spin()
 
 
