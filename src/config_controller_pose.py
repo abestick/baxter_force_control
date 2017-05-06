@@ -15,7 +15,7 @@ from tf.transformations import quaternion_from_euler
 from tools import multidot
 from tools import colvec, array_squared
 from sensor_msgs.msg import JointState
-from track_kinmodel import KinematicTreeTracker, KinematicTreeExternalFrameTracker
+from kinmodel.track_kinmodel import KinematicTreeTracker, KinematicTreeExternalFrameTracker
 
 MAX_JOINT_VEL = 1.5  # Max commanded joint velocity
 MAX_NS_JOINT_VEL = 0.5  # Max nullspace joint velocity
