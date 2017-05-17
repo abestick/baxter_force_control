@@ -61,7 +61,7 @@ class MocapProcessor(object):
         self.goal = input_data['goal']
 
         # number of trials will be half of whats left after subtracting start, goal and marker nums
-        self.trials = (len(input_data.keys()) - 5) / 2
+        self.trials = (len(input_data.keys()) - 3) / 2
 
         self.marker_pos = OrderedDict()
         self.marker_vel = OrderedDict()
@@ -205,8 +205,9 @@ class MocapProcessor(object):
         sliced = self.clone()
         time = self._parse_time(trial, start_time, stop_time)
         sliced.marker_pos[trial] = sliced.marker_pos[trial][:, :, time]
-        sliced.marker_vel[trial] = sliced.marker_vel[trial][:, :, time]
+        sliced.marker_vel[trial] = sliced.marker_vel[trial][:, :, time[1:]]
         sliced.time_data[trial] = sliced.time_data[trial][time]
+        sliced._setup_plottables()
         return sliced
 
     def velocity_crop(self, max_vel, trials=slice(None), axis=None):
@@ -215,10 +216,13 @@ class MocapProcessor(object):
         cropped = self.clone()
         for trial in trials:
             start_index = np.argmax(np.any(abs(np.nan_to_num(cropped.marker_vel[trial])) > max_vel, axis=(0, 1)))
-            stop_index = np.argmax(np.any(abs(np.nan_to_num(cropped.marker_vel[trial])) > max_vel, axis=(0, 1))[::-1])
-            cropped.marker_pos[trial] = cropped.marker_pos[trial][:, :, start_index:-stop_index]
-            cropped.marker_vel[trial] = cropped.marker_vel[trial][:, :, start_index:-stop_index]
-            cropped.time_data[trial] = cropped.time_data[trial][start_index:-stop_index]
+            stop_index = -np.argmax(np.any(abs(np.nan_to_num(cropped.marker_vel[trial])) > max_vel, axis=(0, 1))[::-1])
+            if stop_index == 0:
+                stop_index = None
+            print(start_index, stop_index)
+            cropped.marker_pos[trial] = cropped.marker_pos[trial][:, :, start_index:stop_index]
+            cropped.marker_vel[trial] = cropped.marker_vel[trial][:, :, start_index:stop_index]
+            cropped.time_data[trial] = cropped.time_data[trial][start_index:stop_index]
 
         cropped._setup_plottables()
         if axis is not None:
@@ -265,10 +269,27 @@ class MocapProcessor(object):
             filtered.plot_vel(axis, trials)
         return filtered
 
-    def get_npz_data(self):
+    def get_npz_data(self, select=None, exclude=None):
+
+        if select is not None and exclude is not None:
+            raise ValueError("You cannot pass select and exclude at the same time!")
+
+        if select is None:
+            select = self.marker_pos.keys()
+
+        if exclude is None:
+            exclude = []
+
         save_data = {}
+        base = 'full_sequence_'
+
         for trial, pos, vel, time in self:
-            save_data['trial_' + str(trial)] = None
+            if trial in select and trial not in exclude:
+                save_data[base + str(trial)] = pos.copy()
+                save_data['vel_' + str(trial)] = vel.copy()
+                save_data['time_' + str(trial)] = time.copy()
+
+        return save_data
 
 
 
@@ -280,7 +301,12 @@ def pad_tuple(tup, *args):
     return tup + args[len(tup):]
 
 
+def show_full_screen():
+    pass
+
+
 def main():
+
     parser = argparse.ArgumentParser()
     parser.add_argument('input_data_npz', help='The input npz data')
     parser.add_argument('output_data_npz', help='The output npz data')
@@ -290,17 +316,24 @@ def main():
     processor = MocapProcessor(raw_data, {})
     cropped = processor.medfilt(kernel_size=5)
     cropped_tmp = cropped.clone()
+    exclude = []
+    max_vel = 0
 
     for trial, _, _, _ in processor:
+        print("Trial %d/%d" % (trial, processor.trials))
         f, (ax_p, ax_v) = plt.subplots(2, sharex=True)
         cropped.plot_vel(ax_v, trial)
         cropped.plot_pos(ax_p, trial)
         plt.show()
-        max_vel = 0
         resp = raw_input("Velocity cutoff? [a to accept, m to manually enter times, "
-                         "<ENTER> to use %f again]:\n" % max_vel)
+                         "<ENTER> to use %f again, d to discard this trial]:\n" % max_vel)
 
         while resp != 'a':
+
+            if resp == 'd':
+                exclude.append(trial)
+                break
+
             f, (ax_p, ax_v) = plt.subplots(2, sharex=True)
 
             if resp == 'm':
@@ -308,20 +341,21 @@ def main():
                 stop = float(raw_input("Stop time?\n"))
                 cropped_tmp = cropped.time_slice(trial, start, stop)
 
-            else:
+            elif resp != '':
                 max_vel = float(resp)
                 print("velcrop", max_vel)
                 cropped_tmp = cropped.velocity_crop(max_vel, trial, ax_v)
 
             cropped_tmp.plot_pos(ax_p, trial)
+            cropped_tmp.plot_vel(ax_v, trial)
             plt.show()
             resp = raw_input("Velocity cutoff? [a to accept, m to manually enter times, "
                                 "<ENTER> to use %f again]:\n" % max_vel)
 
         cropped = cropped_tmp
 
-    with open(args.output_npz, 'w') as output_file:
-        np.savez_compressed(output_file)
+    with open(args.output_data_npz, 'w') as output_file:
+        np.savez_compressed(output_file, **cropped.get_npz_data(exclude=exclude))
         print('Task sequences saved to ' + args.output_data_npz)
 
 if __name__ == '__main__':
