@@ -16,11 +16,11 @@ class ObjectOptimizer(object):
 
     default_alpha = np.array([0.6, 0.2, 0, 0.2])
 
-    def __init__(self, num_joints, get_human_jacobian, get_robot_jacobian, joint_angles_topic,
+    def __init__(self, num_joints, get_object_human_jacobian, get_object_robot_jacobian, joint_angles_topic,
                  configuration_ref, intent, initial_alpha=None, get_initial_guess=None, k_p=1.0):
         self.num_joints = num_joints
-        self.get_human_jacobian = get_human_jacobian
-        self.get_robot_jacobian = get_robot_jacobian
+        self.get_object_human_jacobian = get_object_human_jacobian
+        self.get_object_robot_jacobian = get_object_robot_jacobian
         self.configuration_ref = colvec(configuration_ref)
         self.intent = colvec(intent)
         self.alpha = np.array(initial_alpha) if initial_alpha is not None else self.default_alpha.copy()
@@ -41,7 +41,7 @@ class ObjectOptimizer(object):
         self.sub_joints = rospy.Subscriber(joint_angles_topic, JointState, self._update_joints)
 
     def manipulability_cost(self, q):
-        return npla.norm(np.dot(npla.pinv(self.get_human_jacobian(np.squeeze(q))[:3, :]), self.intent))
+        return npla.norm(np.dot(npla.pinv(self.get_object_human_jacobian(np.squeeze(q))[:3, :]), self.intent))
 
     def configuration_cost(self, q):
         return npla.norm(colvec(q)-self.configuration_ref)
@@ -50,7 +50,7 @@ class ObjectOptimizer(object):
         return npla.norm(q - self.joints)
 
     def effector_movement_cost(self, q):
-        return npla.norm(self.get_robot_jacobian(np.squeeze(self.joints)).dot(colvec(q) - self.joints))
+        return npla.norm(self.get_object_robot_jacobian(np.squeeze(self.joints)).dot(colvec(q) - self.joints))
 
     def total_cost(self, q):
         cost_array = np.array([self.manipulability_cost(q), self.configuration_cost(q),

@@ -1,4 +1,8 @@
 from abc import ABCMeta, abstractmethod
+import numpy as np
+import numpy.linalg as npla
+from tools import colvec
+
 
 class StateCost(object):
     """Base class for all other cost function classes. Derived classes must implement, at a minimum,
@@ -36,6 +40,7 @@ class StateCost(object):
             perturbed_state_dict[state_var] = perturbed_state_dict[state_var] - EPSILON
         return jacobian_dict
 
+
 class QuadraticDisplacementCost(StateCost):
     def __init__(self, state_names, neutral_state_values):
         if len(state_names) != neutral_state_values:
@@ -51,6 +56,42 @@ class QuadraticDisplacementCost(StateCost):
             except KeyError:
                 raise ValueError('State dict missing the variable: \'' + state_var + '\'')
         return total_cost
+
+
+class ManipulabilityCost(StateCost):
+
+    intent_states = ['x', 'y', 'z', 'roll', 'pitch', 'yaw']
+
+    def __init__(self, object_joint_names, get_object_human_jacobian, intent):
+        self.required_state_vars = object_joint_names
+
+        assert set(intent) <= set(self.intent_states), 'intent must be a dict with a subset of these keys: %s' % \
+                                                       self.intent_states
+
+        self.intent = intent
+        self.get_object_human_jacobian = get_object_human_jacobian
+
+        self.intent_pose_indices = []
+        intent_list = []
+
+        for i, state in enumerate(self.intent_states):
+            if state in self.intent:
+                self.intent_pose_indices.append(i)
+                intent_list.append(self.intent[state])
+
+        self.intent_array = np.array(intent_list)
+
+    def cost(self, state_dict):
+        jac_dict = self.get_object_human_jacobian()
+        jac_list = []
+        for state in self.required_state_vars:
+            jac_list.append(jac_dict[state])
+
+        jac = np.array(jac_list).T
+        jac = jac[self.intent_pose_indices, :]
+
+        return npla.norm(np.dot(npla.pinv(jac), self.intent_array))
+
 
 class WeightedCostCombination(StateCost):
     def __init__(self, cost_funcs, weights=None):
