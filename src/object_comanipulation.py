@@ -1,15 +1,17 @@
 #!/usr/bin/python
 
-import rospy
 import numpy as np
 import numpy.linalg as npla
-from pykdl_utils.kdl_kinematics import KDLKinematics
-from urdf_parser_py.urdf import URDF
-from tools import colvec
-from sensor_msgs.msg import JointState
+
+import rospy
 from geometry_msgs.msg import Twist
+from pykdl_utils.kdl_kinematics import KDLKinematics
 from scipy.optimize import minimize
+from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32MultiArray
+from urdf_parser_py.urdf import URDF
+
+from kinmodel.tools import colvec
 
 
 class ObjectOptimizer(object):

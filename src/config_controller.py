@@ -1,21 +1,21 @@
 #!/usr/bin/python
-import rospy
-import baxter_interface
 import argparse
-from baxter_pykdl import baxter_kinematics
 import numpy as np
 import numpy.linalg as npla
 import threading
-import pid_controllers
+
+import baxter_interface
 import phasespace.load_mocap as load_mocap
-import kinmodel
+import rospy
 import tf
-from std_msgs.msg import Float32MultiArray
-from tf.transformations import quaternion_from_euler
-from tools import multidot
-from tools import colvec, array_squared
-from sensor_msgs.msg import JointState
+from baxter_pykdl import baxter_kinematics
 from kinmodel.track_kinmodel import KinematicTreeTracker, KinematicTreeExternalFrameTracker
+from sensor_msgs.msg import JointState
+from tf.transformations import quaternion_from_euler
+
+import kinmodel
+from kinmodel.tools import colvec
+from kinmodel.tools import multidot
 
 MAX_JOINT_VEL = 1.5  # Max commanded joint velocity
 MAX_NS_JOINT_VEL = 0.5  # Max nullspace joint velocity

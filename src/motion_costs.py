@@ -1,7 +1,8 @@
-from abc import ABCMeta, abstractmethod
+#!/usr/bin/env python
 import numpy as np
 import numpy.linalg as npla
-from tools import colvec
+from abc import ABCMeta, abstractmethod
+from kinmodel.tools import unit_vector
 
 
 class StateCost(object):
@@ -82,15 +83,34 @@ class ManipulabilityCost(StateCost):
         self.intent_array = np.array(intent_list)
 
     def cost(self, state_dict):
+        # Get the dict of columns for the jacobian
         jac_dict = self.get_object_human_jacobian()
-        jac_list = []
-        for state in self.required_state_vars:
-            jac_list.append(jac_dict[state])
 
+        # Put each column in a list
+        jac_list = [jac_dict[state] for state in self.required_state_vars]
+
+        # Transform into an array
         jac = np.array(jac_list).T
-        jac = jac[self.intent_pose_indices, :]
 
+        # Subset for the dimensions we care about
+        jac = jac[:, self.intent_pose_indices]
+
+        # Invert, multiply with the intent array and take the norm
         return npla.norm(np.dot(npla.pinv(jac), self.intent_array))
+
+
+class BasisManipulabilityCost(ManipulabilityCost):
+
+    def __init__(self, object_joint_names, get_object_human_jacobian, intent_dimension):
+
+        # Make sure we have chosen a possible pose dimension
+        assert intent_dimension in self.intent_states, "intent_dimensions must be one of %s" % self.intent_states
+
+        # Make a 1-d unit intent
+        intent = {intent_dimension: 1.0}
+
+        # Pass along to parent init
+        super(BasisManipulabilityCost, self).__init__(object_joint_names, get_object_human_jacobian, intent)
 
 
 class WeightedCostCombination(StateCost):
@@ -105,13 +125,15 @@ class WeightedCostCombination(StateCost):
                     self.required_state_vars.append(required_var)
 
         if weights is None:
-            uniform_weight = 1.0 / len(cost_funcs)
-            self.weights = [uniform_weight] * len(cost_funcs)
+            self.weights = np.ones(len(cost_funcs)) / len(cost_funcs)
         else:
-            self.weights = weights
+            self.weights = unit_vector(np.array(weights))
 
     def cost(self, state_dict):
         total_cost = 0
         for (weight, cost_func) in zip(self.weights, self.cost_funcs):
             total_cost += cost_func.cost(state_dict) * weight
         return total_cost
+
+    def cost_basis_vector(self, state_dict):
+        return np.array([cost_function(state_dict) for cost_function in self.cost_funcs])
