@@ -2,7 +2,6 @@
 import numpy as np
 import numpy.linalg as npla
 from abc import ABCMeta, abstractmethod
-from kinmodel.tools import unit_vector
 
 
 class StateCost(object):
@@ -10,6 +9,11 @@ class StateCost(object):
     the .cost(state_dict) method, and populate the self.required_state_vars instance variable
     """
     __metaclass__ = ABCMeta
+
+
+    def __init__(self, name):
+        self.name = name
+
 
     @abstractmethod
     def cost(self, state_dict):
@@ -43,7 +47,8 @@ class StateCost(object):
 
 
 class QuadraticDisplacementCost(StateCost):
-    def __init__(self, reference):
+    def __init__(self, name, reference):
+        super(QuadraticDisplacementCost, self).__init__(name)
         self.required_state_vars = reference.keys()
         self.neutral_state_values = reference
 
@@ -56,12 +61,24 @@ class QuadraticDisplacementCost(StateCost):
                 raise ValueError('State dict missing the variable: \'' + state_var + '\'')
         return total_cost
 
+    def jacobian(self, state_dict):
+        jacobian_dict = {}
+
+        for state_var in self.required_state_vars:
+            try:
+                jacobian_dict[state_var] = 2 * (state_dict[state_var] -
+                                                              self.neutral_state_values[state_var])
+            except KeyError:
+                raise ValueError('State dict missing the variable: \'' + state_var + '\'')
+        return jacobian_dict
+
 
 class ManipulabilityCost(StateCost):
 
     intent_states = ['x', 'y', 'z', 'roll', 'pitch', 'yaw']
 
-    def __init__(self, object_joint_names, get_object_human_jacobian, intent):
+    def __init__(self, name, object_joint_names, get_object_human_jacobian, intent):
+        super(ManipulabilityCost, self).__init__(name)
         self.required_state_vars = object_joint_names
 
         assert set(intent) <= set(self.intent_states), 'intent must be a dict with a subset of these keys: %s' % \
@@ -81,8 +98,10 @@ class ManipulabilityCost(StateCost):
         self.intent_array = np.array(intent_list)
 
     def cost(self, state_dict):
+        assert set(self.required_state_vars.keys) <= state_dict.keys()
+
         # Get the dict of columns for the jacobian
-        jac_dict = self.get_object_human_jacobian()
+        jac_dict = self.get_object_human_jacobian(state_dict)
 
         # Put each column in a list
         jac_list = [jac_dict[state] for state in self.required_state_vars]
@@ -93,13 +112,13 @@ class ManipulabilityCost(StateCost):
         # Subset for the dimensions we care about
         jac = jac[:, self.intent_pose_indices]
 
-        # Invert, multiply with the intent array and take the norm
-        return npla.norm(np.dot(npla.pinv(jac), self.intent_array))
+        # Invert, multiply with the intent array and take the norm (squared ?)
+        return npla.norm(np.dot(npla.pinv(jac), self.intent_array)) ** 2
 
 
 class BasisManipulabilityCost(ManipulabilityCost):
 
-    def __init__(self, object_joint_names, get_object_human_jacobian, intent_dimension):
+    def __init__(self, name, object_joint_names, get_object_human_jacobian, intent_dimension):
 
         # Make sure we have chosen a possible pose dimension
         assert intent_dimension in self.intent_states, "intent_dimensions must be one of %s" % self.intent_states
@@ -108,20 +127,22 @@ class BasisManipulabilityCost(ManipulabilityCost):
         intent = {intent_dimension: 1.0}
 
         # Pass along to parent init
-        super(BasisManipulabilityCost, self).__init__(object_joint_names, get_object_human_jacobian, intent)
+        super(BasisManipulabilityCost, self).__init__(name, object_joint_names, get_object_human_jacobian, intent)
 
 
 class WeightedCostCombination(StateCost):
-    def __init__(self, cost_funcs, weights=None):
+    def __init__(self, name, cost_funcs, weights=None):
+        super(WeightedCostCombination, self).__init__(name)
+
+        self.cost_funcs = {cost_func.name: cost_func for cost_func in cost_funcs}
 
         if weights is None:
-            self.weights = np.ones(len(cost_funcs)) / len(cost_funcs)
+            self.weights = {cost_func_name: 1.0/len(cost_funcs) for cost_func_name in self.cost_funcs}
         else:
             self.weights = np.array(weights)/np.sum(weights)
 
         if len(cost_funcs) != len(self.weights):
             raise ValueError('Cost functions and weights lists must have same length')
-        self.cost_funcs = cost_funcs
         self.required_state_vars = list(set().union(*[cost_func.get_required_state_vars() for cost_func in cost_funcs]))
 
     def cost(self, state_dict):
@@ -132,3 +153,34 @@ class WeightedCostCombination(StateCost):
 
     def cost_basis_vector(self, state_dict):
         return np.array([cost_function.cost(state_dict) for cost_function in self.cost_funcs])
+
+    def jacobian_bases(self, state_dict):
+        jacobian_bases_dicts = {}
+        for cost_func_name in self.cost_funcs:
+            jacobian_bases_dicts[cost_func_name] = self.cost_funcs[cost_func_name].jacobian(state_dict)
+
+        return jacobian_bases_dicts
+
+    def jacobian_bases_matrix(self, jacobian_bases_dicts, row_names=None, column_names=None):
+
+        if column_names is None:
+            column_names = jacobian_bases_dicts.keys()
+
+        else:
+            assert set(column_names) <= set(jacobian_bases_dicts.keys()), "column_names must be a subset of %s" % \
+                                                                          jacobian_bases_dicts.keys()
+
+        all_row_names = set().union([jacobian_bases_dicts[column_name].keys() for column_name in column_names])
+        if row_names is None:
+            row_names = list(all_row_names)
+
+        else:
+            assert set(row_names) <= all_row_names, "row_names must be a subset of %s" % all_row_names
+
+        jacobian_bases_matrix = np.zeros((len(row_names), len(column_names)))
+
+        for j, column_name in enumerate(column_names):
+            for i, row_name in enumerate(row_names):
+                jacobian_bases_matrix[i, j] = jacobian_bases_dicts[column_name].get(row_name, 0.0)
+
+        return jacobian_bases_matrix, row_names, column_names
