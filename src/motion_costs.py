@@ -43,11 +43,9 @@ class StateCost(object):
 
 
 class QuadraticDisplacementCost(StateCost):
-    def __init__(self, state_names, neutral_state_values):
-        if len(state_names) != neutral_state_values:
-            raise ValueError('State names and neutral values lists must have same length')
-        self.required_state_vars = state_names
-        self.neutral_state_values = neutral_state_values
+    def __init__(self, reference):
+        self.required_state_vars = reference.keys()
+        self.neutral_state_values = reference
 
     def cost(self, state_dict):
         total_cost = 0
@@ -115,19 +113,16 @@ class BasisManipulabilityCost(ManipulabilityCost):
 
 class WeightedCostCombination(StateCost):
     def __init__(self, cost_funcs, weights=None):
-        if len(cost_funcs) != len(weights):
-            raise ValueError('Cost functions and weights lists must have same length')
-        self.cost_funcs = cost_funcs
-        self.required_state_vars = []
-        for cost_func in cost_funcs:
-            for required_var in cost_func.get_required_state_vars():
-                if required_var not in self.required_state_vars:
-                    self.required_state_vars.append(required_var)
 
         if weights is None:
             self.weights = np.ones(len(cost_funcs)) / len(cost_funcs)
         else:
-            self.weights = unit_vector(np.array(weights))
+            self.weights = np.array(weights)/np.sum(weights)
+
+        if len(cost_funcs) != len(self.weights):
+            raise ValueError('Cost functions and weights lists must have same length')
+        self.cost_funcs = cost_funcs
+        self.required_state_vars = list(set().union(*[cost_func.get_required_state_vars() for cost_func in cost_funcs]))
 
     def cost(self, state_dict):
         total_cost = 0
@@ -136,4 +131,4 @@ class WeightedCostCombination(StateCost):
         return total_cost
 
     def cost_basis_vector(self, state_dict):
-        return np.array([cost_function(state_dict) for cost_function in self.cost_funcs])
+        return np.array([cost_function.cost(state_dict) for cost_function in self.cost_funcs])

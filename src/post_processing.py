@@ -280,7 +280,7 @@ class MocapProcessor(object):
         if exclude is None:
             exclude = []
 
-        save_data = {}
+        save_data = {'goal': self.goal, 'start': self.start}
         base = 'full_sequence_'
 
         for trial, pos, vel, time in self:
@@ -290,7 +290,6 @@ class MocapProcessor(object):
                 save_data['time_' + str(trial)] = time.copy()
 
         return save_data
-
 
 
 def pad_tuple(tup, *args):
