@@ -2,12 +2,12 @@
 import rospy
 from motion_costs import WeightedCostCombination
 import numpy as np
-from scipy.optimize import minimize
+from collections import OrderedDict
 
 
 class SystemState(object):
 
-    def __init__(self, state_trackers, cost_functions):
+    def __init__(self, state_trackers, kinematic_system_tracker, cost_functions):
         """
         Constructor
         :param list state_trackers: a list of trackers which each contain a step function that return a dict of states
@@ -15,10 +15,19 @@ class SystemState(object):
         """
         self.state_trackers = state_trackers
         self.cost_functions = cost_functions
-        self.costs = {}
-        self.states = {}
+        self.kinematic_system_tracker = kinematic_system_tracker
+
+        self.state_sources = {state_name: tracker.name for tracker in self.state_trackers
+                              for state_name in tracker.get_state_names()}
+        self.observation_sources = {observation_name: tracker.name for tracker in self.state_trackers
+                                    for observation_name in tracker.get_observable_names()}
+
+        self.costs = dict.fromkeys(self.cost_functions.keys())
+        self.states = dict.fromkeys(self.state_sources.keys())
+        self.observations = dict.fromkeys(self.observation_sources.keys())
 
         self.iterations = 0
+        self.jacobian_groups = self.kinematic_system_tracker.jacobian_groups()
 
     def step(self):
         """
@@ -32,6 +41,60 @@ class SystemState(object):
             self.costs[cost_name] = self.cost_functions[cost_name].cost(self.states)
 
         self.iterations += 1
+
+    def partial_derivative(self, function_output, function_input, states=None):
+        """
+        
+        :param function_output: A list of strings which is the output vector of the function
+        :param function_input: A list of strings which is the input vector to the function
+        :param states: the system states, if None will default to the current state
+        :return: 
+        """
+
+        if states is None:
+            states = self.states
+
+        # Create sets of each of the vectors
+        output_set = set(function_output)
+        input_set = set(function_input)
+
+        # Check for duplicates within a single vector
+        assert len(output_set) == len(function_output), "Duplicates found in function_output!"
+        assert len(input_set) == len(function_input), "Duplicates found in function_input!"
+
+        # We will create a dictionary of groups that these states pertain to
+        output_groups = {}
+        input_groups = {}
+
+        for group_name in self.jacobian_groups:
+            group_set = set(self.jacobian_groups[group_name])
+
+            #  if there are some elements that are part of this group, add the group
+            if len(output_set & group_set) > 0:
+                output_groups[group_name] = output_set & group_set
+
+            if len(input_set & group_set) > 0:
+                input_groups[group_name] = output_set & group_set
+
+        redundant_full_jacobian = None
+
+        # Now we know all the jacobians we will need subsets of to compute the partial derivative
+        for output_group_name in output_groups:
+            column_block = None
+            for input_group_name in input_groups:
+                # partial is a Jacobian object
+                partial = self.kinematic_system_tracker.partial_derivative(output_group_name, input_group_name, states)
+
+                # Stack this Jacobian ontop of the others. If column_block is None, it will return partial
+                column_block = partial.vstack(column_block)
+
+            redundant_full_jacobian = column_block.hstack(redundant_full_jacobian)
+
+        # Now we have a big jacobian with all the states needed and maybe some unnecessary ones
+        trimmed_jacobian = redundant_full_jacobian.subset(row_names=list(function_output),
+                                                          column_names=list(function_output))
+
+        return trimmed_jacobian
 
 
 class OnlineSystem(SystemState):
@@ -118,9 +181,6 @@ class OfflineSystem(SystemState):
                                if isinstance(self.cost_functions[cost_name],
                                              WeightedCostCombination) and jacobian_bases}
 
-        row_names = None
-        column_names = None
-
         # timestep_estimation is a tuple of dicts across all trackers on one timestep
         for timestep_estimations in zip(*all_tracker_estimations):
 
@@ -154,7 +214,10 @@ class OfflineSystem(SystemState):
 
         return all_merged_estimations, all_costs, jacobian_bases_dict
 
-    def learn_weights(self, input_states):
+    def learn_weights(self, input_states_names):
+
+        # make sure input_states is ordered
+        input_states_names = list(input_states_names)
 
         # empty dict for the weights of each cost
         weights = {}
@@ -163,23 +226,51 @@ class OfflineSystem(SystemState):
         all_states, _, all_jacobian_bases = self.run_through(jacobian_bases=True)
         print(all_jacobian_bases)
 
-        # Initialize row order and column order to None so that the weighted cost automatically sets it
-        row_names = None
-        columns_names = None
-
-        y =
+        y = np.array([state_estimate[input_state] for state_estimate in all_states
+                      for input_state in input_states_names])
 
         # For every weighted cost function
         # costname maps to a list of dicts across time
         for cost_name in all_jacobian_bases:
 
-            # For every time instance for this cost1
-            # jacobian_bases_dict is a dict of dicts, each key mapping to a jacobian for a cost basis
-            for jacobian_bases_dict in all_jacobian_bases[cost_name]:
-                # convert the dict of dicts into a matrix whereby each cost basis has a column and each state has a row
-                jacobian_bases_matrix, row_names, columns_names = \
-                    self.cost_functions[cost_name].jacobian_bases_matrix(jacobian_bases_dict)
+            A_columns = OrderedDict()
 
+            # Each key of all_jacobian_bases is a list of dicts, each dict containing the jacobians for each cost basis
+            # for that timestep
+            for timestep_jacobian, state_estimate in zip(all_jacobian_bases[cost_name], all_states):
 
+                # Each timestep_jacobian is a dict of basis jacobians
+                for cost_basis_name in timestep_jacobian:
+
+                    # the jacobian of cost as a function of its relevant states
+                    # this is a (1, Xc) jacobian
+                    cost_coststates_jacobian = timestep_jacobian[cost_basis_name]
+
+                    # get the states the cost depends on
+                    coststates = {state_name: state_estimate[state_name]
+                                  for state_name in cost_coststates_jacobian.column_names()}
+
+                    input_states = {state_name: state_estimate[state_name]
+                                    for state_name in input_states}
+
+                    # get the jacobian between these cost states and the input states
+                    # this is a (Xc, U) jacobian
+                    coststates_input_jacobian = self.partial_derivative(coststates, input_states)
+
+                    # compute the jacobian for the cost as a function of input via the chain rule
+                    # produces a (1, U) jacobian which we stack vertically to match y
+                    cost_input_jacobian = cost_coststates_jacobian * coststates_input_jacobian
+
+                    # if this is the first timestep, get will return an empty column matrix
+                    A_columns[cost_basis_name] = np.concatenate([A_columns.get(cost_basis_name, np.empty(0,1)),
+                                                                 cost_input_jacobian.J().T])
+
+            # stack the columns of the A matrix horizontally giving y=Aw for all timesteps
+            A = np.concatenate(A_columns.values())
+
+            # learn the weights
+            w = np.linalg.lstsq(A, y)
+
+            weights[cost_name] = {cost_basis_name: w[i] for i, cost_basis_name in enumerate(A_columns.keys())}
 
         return weights

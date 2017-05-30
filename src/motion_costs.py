@@ -2,6 +2,7 @@
 import numpy as np
 import numpy.linalg as npla
 from abc import ABCMeta, abstractmethod
+from kinmodel import Jacobian
 
 
 class StateCost(object):
@@ -9,7 +10,6 @@ class StateCost(object):
     the .cost(state_dict) method, and populate the self.required_state_vars instance variable
     """
     __metaclass__ = ABCMeta
-
 
     def __init__(self, name):
         self.name = name
@@ -43,7 +43,7 @@ class StateCost(object):
             perturbed_state_dict[state_var] = perturbed_state_dict[state_var] + EPSILON
             jacobian_dict[state_var] = (self.cost(perturbed_state_dict) - initial_cost) / EPSILON
             perturbed_state_dict[state_var] = perturbed_state_dict[state_var] - EPSILON
-        return jacobian_dict
+        return Jacobian(jacobian_dict)
 
 
 class QuadraticDisplacementCost(StateCost):
@@ -77,7 +77,7 @@ class ManipulabilityCost(StateCost):
 
     intent_states = ['x', 'y', 'z', 'roll', 'pitch', 'yaw']
 
-    def __init__(self, name, object_joint_names, get_object_human_jacobian, intent):
+    def __init__(self, name, object_joint_names, get_object_manip_jacobian, intent):
         super(ManipulabilityCost, self).__init__(name)
         self.required_state_vars = object_joint_names
 
@@ -85,7 +85,7 @@ class ManipulabilityCost(StateCost):
                                                        self.intent_states
 
         self.intent = intent
-        self.get_object_human_jacobian = get_object_human_jacobian
+        self.get_object_human_jacobian = get_object_manip_jacobian
 
         self.intent_pose_indices = []
         intent_list = []
@@ -118,7 +118,7 @@ class ManipulabilityCost(StateCost):
 
 class BasisManipulabilityCost(ManipulabilityCost):
 
-    def __init__(self, name, object_joint_names, get_object_human_jacobian, intent_dimension):
+    def __init__(self, name, object_joint_names, get_object_manip_jacobian, intent_dimension):
 
         # Make sure we have chosen a possible pose dimension
         assert intent_dimension in self.intent_states, "intent_dimensions must be one of %s" % self.intent_states
@@ -127,7 +127,7 @@ class BasisManipulabilityCost(ManipulabilityCost):
         intent = {intent_dimension: 1.0}
 
         # Pass along to parent init
-        super(BasisManipulabilityCost, self).__init__(name, object_joint_names, get_object_human_jacobian, intent)
+        super(BasisManipulabilityCost, self).__init__(name, object_joint_names, get_object_manip_jacobian, intent)
 
 
 class WeightedCostCombination(StateCost):
@@ -160,27 +160,3 @@ class WeightedCostCombination(StateCost):
             jacobian_bases_dicts[cost_func_name] = self.cost_funcs[cost_func_name].jacobian(state_dict)
 
         return jacobian_bases_dicts
-
-    def jacobian_bases_matrix(self, jacobian_bases_dicts, row_names=None, column_names=None):
-
-        if column_names is None:
-            column_names = jacobian_bases_dicts.keys()
-
-        else:
-            assert set(column_names) <= set(jacobian_bases_dicts.keys()), "column_names must be a subset of %s" % \
-                                                                          jacobian_bases_dicts.keys()
-
-        all_row_names = set().union([jacobian_bases_dicts[column_name].keys() for column_name in column_names])
-        if row_names is None:
-            row_names = list(all_row_names)
-
-        else:
-            assert set(row_names) <= all_row_names, "row_names must be a subset of %s" % all_row_names
-
-        jacobian_bases_matrix = np.zeros((len(row_names), len(column_names)))
-
-        for j, column_name in enumerate(column_names):
-            for i, row_name in enumerate(row_names):
-                jacobian_bases_matrix[i, j] = jacobian_bases_dicts[column_name].get(row_name, 0.0)
-
-        return jacobian_bases_matrix, row_names, column_names
