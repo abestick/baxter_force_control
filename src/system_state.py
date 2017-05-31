@@ -22,6 +22,8 @@ class SystemState(object):
 
         self.costs = dict.fromkeys(self.cost_functions.keys())
         self.states = dict.fromkeys(self.state_sources.keys())
+        self.observables = dict.fromkeys(self.kinematic_system_tracker.get_observables().keys())
+        self.system_states = self.states.copy().update(self.observables)
 
         self.iterations = 0
         self.jacobian_groups = self.kinematic_system_tracker.jacobian_groups()
@@ -33,6 +35,10 @@ class SystemState(object):
         """
         for i in range(len(self.state_trackers)):
             self.states.update(self.state_trackers[i].step())
+
+        self.observables.update(self.kinematic_system_tracker.get_observables(self.states))
+        self.system_states.update(self.states)
+        self.system_states.update(self.observables)
 
         for cost_name in self.cost_functions:
             self.costs[cost_name] = self.cost_functions[cost_name].cost(self.states)
@@ -93,7 +99,7 @@ class SystemState(object):
 
         return trimmed_jacobian
 
-    def partial_derivative(self, function_output, function_input, states=None):
+    def partial_derivative(self, coordinate_frame, function_output, function_input, states=None):
         """
         
         :param function_output: A list of strings which is the output vector of the function
@@ -105,7 +111,7 @@ class SystemState(object):
         if states is None:
             states = self.states
 
-        full_partial_derivative = self.kinematic_system_tracker.full_partial_derivative(states)
+        full_partial_derivative = self.kinematic_system_tracker.full_partial_derivative(coordinate_frame, states)
         return full_partial_derivative.subset(row_names=list(function_output),
                                               column_names=list(function_input))
 
@@ -179,7 +185,6 @@ class OfflineSystem(SystemState):
 
         # append the list with each trackers estimations over time
         for tracker in self.state_trackers:
-            print(tracker.name)
             tracker_estimations, _, _ = tracker.run(record=True)
             all_tracker_estimations.append(tracker_estimations)
 
@@ -205,12 +210,13 @@ class OfflineSystem(SystemState):
             for timestep_tracker_estimation in timestep_estimations:
                 timestep_merged_estimations.update(timestep_tracker_estimation)
 
+            timestep_merged_estimations.update(self.kinematic_system_tracker.get_observables(timestep_merged_estimations))
+
             # append this timesteps full estimate
             all_merged_estimations.append(timestep_merged_estimations)
 
             # calculate each of the costs
             for cost_name in self.cost_functions:
-                print(timestep_merged_estimations)
                 costs[cost_name] = self.cost_functions[cost_name].cost(timestep_merged_estimations)
 
                 # if we are calculating basis vectors, do so for compatible costs and append to the list across time
@@ -221,13 +227,9 @@ class OfflineSystem(SystemState):
             # add this timesteps costs to the list across time
             all_costs.append(costs)
 
-        # stack the
-        for cost_name in jacobian_bases_dict:
-            jacobian_bases_dict[cost_name] = np.vstack(jacobian_bases_dict[cost_name])
-
         return all_merged_estimations, all_costs, jacobian_bases_dict
 
-    def learn_weights(self, input_states_names):
+    def learn_weights(self, input_states_names, input_states_frame):
 
         # make sure input_states is ordered
         input_states_names = list(input_states_names)
@@ -237,7 +239,6 @@ class OfflineSystem(SystemState):
 
         # calculate the basis vector of costs for each time step for each cost function
         all_states, _, all_jacobian_bases = self.run_through(jacobian_bases=True)
-        print(all_jacobian_bases)
 
         y = np.array([state_estimate[input_state] for state_estimate in all_states
                       for input_state in input_states_names])
@@ -264,26 +265,27 @@ class OfflineSystem(SystemState):
                                   for state_name in cost_coststates_jacobian.column_names()}
 
                     input_states = {state_name: state_estimate[state_name]
-                                    for state_name in input_states}
+                                    for state_name in input_states_names}
 
                     # get the jacobian between these cost states and the input states
                     # this is a (Xc, U) jacobian
-                    coststates_input_jacobian = self.partial_derivative(coststates, input_states)
+                    coststates_input_jacobian = self.partial_derivative(input_states_frame,
+                                                                        coststates, input_states, state_estimate)
 
                     # compute the jacobian for the cost as a function of input via the chain rule
                     # produces a (1, U) jacobian which we stack vertically to match y
                     cost_input_jacobian = cost_coststates_jacobian * coststates_input_jacobian
 
                     # if this is the first timestep, get will return an empty column matrix
-                    A_columns[cost_basis_name] = np.concatenate([A_columns.get(cost_basis_name, np.empty(0,1)),
-                                                                 cost_input_jacobian.J().T])
+                    A_columns[cost_basis_name] = np.concatenate([A_columns.get(cost_basis_name, np.empty((0,1))),
+                                                                 cost_input_jacobian.J().T], axis=0)
 
             # stack the columns of the A matrix horizontally giving y=Aw for all timesteps
-            A = np.concatenate(A_columns.values())
+            A = np.concatenate(A_columns.values(), axis=1)
 
             # learn the weights
             w = np.linalg.lstsq(A, y)
 
-            weights[cost_name] = {cost_basis_name: w[i] for i, cost_basis_name in enumerate(A_columns.keys())}
+            weights[cost_name] = {cost_basis_name: w[0][i] for i, cost_basis_name in enumerate(A_columns.keys())}
 
         return weights

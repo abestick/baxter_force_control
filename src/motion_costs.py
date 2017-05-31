@@ -108,11 +108,6 @@ class ManipulabilityCost(StateCost):
         # Subset for the dimensions we care about
         jacobian = jacobian.subset(row_names=self.intent.keys())
 
-        print(jacobian.pinv())
-        print(self.intent)
-        print(jacobian.pinv()*self.intent)
-        print(npla.norm(jacobian.pinv()*self.intent) ** 2)
-
         # Invert, multiply with the intent array and take the norm (squared ?)
         return npla.norm(jacobian.pinv()*self.intent) ** 2
 
@@ -147,7 +142,6 @@ class WeightedCostCombination(StateCost):
         self.required_state_vars = list(set().union(*[cost_func.get_required_state_vars() for cost_func in cost_funcs]))
 
     def cost(self, state_dict):
-        print(state_dict)
         total_cost = 0.0
         for cost_func_name in self.cost_funcs:
             total_cost += self.cost_funcs[cost_func_name].cost(state_dict) * self.weights[cost_func_name]

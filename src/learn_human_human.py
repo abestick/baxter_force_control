@@ -6,7 +6,7 @@ from system_state import OfflineSystem
 from motion_costs import WeightedCostCombination, BasisManipulabilityCost, QuadraticDisplacementCost
 import phasespace.load_mocap as load_mocap
 import kinmodel
-from phasespace.mocap_definitions import MocapWrist
+import json
 
 
 FRAMERATE = 50
@@ -17,18 +17,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('kinmodel_json_optimized', help='The kinematic model JSON file')
     parser.add_argument('task_npz')
+    parser.add_argument('weights_json', help='The learned weights output JSON file')
     args = parser.parse_args()
 
     # Load the calibration sequence
     data = np.load(args.task_npz)
     trials = 0
-
+    print(data.keys())
     # Stack all the trials
     while 'full_sequence_' + str(trials) in data.keys():
         trials += 1
-    print(trials)
+    print('Number of Trials: %d' % trials)
     mocap_data = [data['full_sequence_' + str(trial)] for trial in range(trials)]
-    print([d.shape[:2] for d in mocap_data])
     all_trials = np.concatenate(mocap_data, axis=2)
 
     # Put into a MocapArray
@@ -42,7 +42,6 @@ def main():
 
     # Initialize the frame tracker and attach frames of interest
     frame_tracker = KinematicTreeExternalFrameTracker(kin_tree.copy())
-    frame_tracker.connect_tracker(object_tracker)
     frame_tracker.attach_frame('joint1', 'base')
     frame_tracker.attach_frame('joint4', 'flap1')
     frame_tracker.attach_frame('joint5', 'flap2')
@@ -83,7 +82,10 @@ def main():
 
     # Create the offline system and learn the weights of the Weighted Cost
     system = OfflineSystem([object_tracker], frame_tracker, costs)
-    print(system.learn_weights(['flap1_' + element for element in kinmodel.POSE_NAMES]))
+    weights = system.learn_weights(['flap1_' + element for element in kinmodel.TRANSFORM_NAMES], 'base')
+
+    with open(args.weights_json, 'w') as fp:
+        json.dump(weights, fp)
 
 
 if __name__ == '__main__':

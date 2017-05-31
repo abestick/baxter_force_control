@@ -357,6 +357,21 @@ def main():
         np.savez_compressed(output_file, **cropped.get_npz_data(exclude=exclude))
         print('Task sequences saved to ' + args.output_data_npz)
 
+
+
+def combine():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('first', help='The first input npz data')
+    parser.add_argument('second', help='The second input npz data')
+    parser.add_argument('output_data_npz', help='The output npz data')
+    args = parser.parse_args()
+
+    raw_data = np.load(args.input_data_npz)
+
+    with open(args.output_data_npz, 'w') as output_file:
+        np.savez_compressed(output_file, **cropped.get_npz_data(exclude=exclude))
+        print('Task sequences saved to ' + args.output_data_npz)
+
 if __name__ == '__main__':
     try:
         main()
