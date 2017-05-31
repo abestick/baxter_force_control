@@ -32,7 +32,7 @@ def main():
     all_trials = np.concatenate(mocap_data, axis=2)
 
     # Put into a MocapArray
-    ukf_mocap = load_mocap.MocapArray(all_trials, FRAMERATE)
+    ukf_mocap = load_mocap.ArrayMocapSource(all_trials, FRAMERATE)
 
     # Initialize the tree
     kin_tree = kinmodel.KinematicTree(json_filename=args.kinmodel_json_optimized)
