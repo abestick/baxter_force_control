@@ -63,19 +63,19 @@ def main():
     # wrist_tracker_2 = WristTracker('wrist2', ukf_mocap, marker_indices_2, reference_frame)
 
     # Hard coded config reference from looking at the raw data
-    config_reference = {object_tracker.name+'_'+'joint2': 0.066,
-                        object_tracker.name+'_'+'joint3': 0.032,
-                        object_tracker.name+'_'+'joint4': 0.017,
-                        object_tracker.name+'_'+'joint5': 0.027}
+    config_reference = {'joint2': 0.066,
+                        'joint3': 0.032,
+                        'joint4': 0.017,
+                        'joint5': 0.027}
 
     # wrist_1_zero = {name: 0 for name in wrist_tracker_1.get_state_names()}
     # wrist_2_zero = {name: 0 for name in wrist_tracker_2.get_state_names()}
 
     # Create a config cost and bases of manipulability costs
     config_cost = QuadraticDisplacementCost('config', config_reference)
-    manip_cost_x = BasisManipulabilityCost('manip_x', config_reference.keys(), get_flap1_jacobian, 'x')
-    manip_cost_y = BasisManipulabilityCost('manip_y', config_reference.keys(), get_flap1_jacobian, 'y')
-    manip_cost_z = BasisManipulabilityCost('manip_z', config_reference.keys(), get_flap1_jacobian, 'z')
+    manip_cost_x = BasisManipulabilityCost('manip_x', config_reference.keys(), get_flap1_jacobian, 'flap1_x')
+    manip_cost_y = BasisManipulabilityCost('manip_y', config_reference.keys(), get_flap1_jacobian, 'flap1_y')
+    manip_cost_z = BasisManipulabilityCost('manip_z', config_reference.keys(), get_flap1_jacobian, 'flap1_z')
 
     # Put these into a weighted cost and put the weighted cost into the system cost dictionary
     costs = {'object_costs': WeightedCostCombination('object_costs',

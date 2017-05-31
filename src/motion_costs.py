@@ -43,7 +43,7 @@ class StateCost(object):
             perturbed_state_dict[state_var] = perturbed_state_dict[state_var] + EPSILON
             jacobian_dict[state_var] = (self.cost(perturbed_state_dict) - initial_cost) / EPSILON
             perturbed_state_dict[state_var] = perturbed_state_dict[state_var] - EPSILON
-        return Jacobian(jacobian_dict)
+        return Jacobian(jacobian_dict, row_names=[self.name])
 
 
 class QuadraticDisplacementCost(StateCost):
@@ -70,7 +70,7 @@ class QuadraticDisplacementCost(StateCost):
                                                               self.neutral_state_values[state_var])
             except KeyError:
                 raise ValueError('State dict missing the variable: \'' + state_var + '\'')
-        return jacobian_dict
+        return Jacobian(jacobian_dict, row_names=[self.name])
 
 
 class ManipulabilityCost(StateCost):
@@ -81,8 +81,8 @@ class ManipulabilityCost(StateCost):
         super(ManipulabilityCost, self).__init__(name)
         self.required_state_vars = object_joint_names
 
-        assert set(intent) <= set(self.intent_states), 'intent must be a dict with a subset of these keys: %s' % \
-                                                       self.intent_states
+        # assert set(intent) <= set(self.intent_states), 'intent must be a dict with a subset of these keys: %s' % \
+        #                                                self.intent_states
 
         self.intent = intent
         self.get_object_human_jacobian = get_object_manip_jacobian
@@ -98,22 +98,23 @@ class ManipulabilityCost(StateCost):
         self.intent_array = np.array(intent_list)
 
     def cost(self, state_dict):
-        assert set(self.required_state_vars.keys) <= state_dict.keys()
+        assert set(self.required_state_vars) <= set(state_dict.keys()), 'state_dict must contain the required state ' \
+                                                                        'variables.\nrequired: %s\nstate_dict:%s' % \
+                                                                        (self.required_state_vars, state_dict.keys())
 
         # Get the dict of columns for the jacobian
-        jac_dict = self.get_object_human_jacobian(state_dict)
-
-        # Put each column in a list
-        jac_list = [jac_dict[state] for state in self.required_state_vars]
-
-        # Transform into an array
-        jac = np.array(jac_list).T
+        jacobian = self.get_object_human_jacobian(state_dict)
 
         # Subset for the dimensions we care about
-        jac = jac[:, self.intent_pose_indices]
+        jacobian = jacobian.subset(row_names=self.intent.keys())
+
+        print(jacobian.pinv())
+        print(self.intent)
+        print(jacobian.pinv()*self.intent)
+        print(npla.norm(jacobian.pinv()*self.intent) ** 2)
 
         # Invert, multiply with the intent array and take the norm (squared ?)
-        return npla.norm(np.dot(npla.pinv(jac), self.intent_array)) ** 2
+        return npla.norm(jacobian.pinv()*self.intent) ** 2
 
 
 class BasisManipulabilityCost(ManipulabilityCost):
@@ -121,7 +122,7 @@ class BasisManipulabilityCost(ManipulabilityCost):
     def __init__(self, name, object_joint_names, get_object_manip_jacobian, intent_dimension):
 
         # Make sure we have chosen a possible pose dimension
-        assert intent_dimension in self.intent_states, "intent_dimensions must be one of %s" % self.intent_states
+        # assert intent_dimension in self.intent_states, "intent_dimensions must be one of %s" % self.intent_states
 
         # Make a 1-d unit intent
         intent = {intent_dimension: 1.0}
@@ -146,13 +147,14 @@ class WeightedCostCombination(StateCost):
         self.required_state_vars = list(set().union(*[cost_func.get_required_state_vars() for cost_func in cost_funcs]))
 
     def cost(self, state_dict):
-        total_cost = 0
-        for (weight, cost_func) in zip(self.weights, self.cost_funcs):
-            total_cost += cost_func.cost(state_dict) * weight
+        print(state_dict)
+        total_cost = 0.0
+        for cost_func_name in self.cost_funcs:
+            total_cost += self.cost_funcs[cost_func_name].cost(state_dict) * self.weights[cost_func_name]
         return total_cost
 
     def cost_basis_vector(self, state_dict):
-        return np.array([cost_function.cost(state_dict) for cost_function in self.cost_funcs])
+        return np.array([self.cost_funcs[cost_func_name].cost(state_dict) for cost_func_name in self.cost_funcs])
 
     def jacobian_bases(self, state_dict):
         jacobian_bases_dicts = {}

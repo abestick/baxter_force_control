@@ -19,12 +19,9 @@ class SystemState(object):
 
         self.state_sources = {state_name: tracker.name for tracker in self.state_trackers
                               for state_name in tracker.get_state_names()}
-        self.observation_sources = {observation_name: tracker.name for tracker in self.state_trackers
-                                    for observation_name in tracker.get_observable_names()}
 
         self.costs = dict.fromkeys(self.cost_functions.keys())
         self.states = dict.fromkeys(self.state_sources.keys())
-        self.observations = dict.fromkeys(self.observation_sources.keys())
 
         self.iterations = 0
         self.jacobian_groups = self.kinematic_system_tracker.jacobian_groups()
@@ -42,7 +39,7 @@ class SystemState(object):
 
         self.iterations += 1
 
-    def partial_derivative(self, function_output, function_input, states=None):
+    def old_partial_derivative(self, function_output, function_input, states=None):
         """
         
         :param function_output: A list of strings which is the output vector of the function
@@ -86,16 +83,31 @@ class SystemState(object):
                 partial = self.kinematic_system_tracker.partial_derivative(output_group_name, input_group_name, states)
 
                 # Stack this Jacobian ontop of the others. If column_block is None, it will return partial
-                column_block = partial.vstack(column_block)
+                column_block = partial.append_vertically(column_block)
 
             redundant_full_jacobian = column_block.hstack(redundant_full_jacobian)
 
         # Now we have a big jacobian with all the states needed and maybe some unnecessary ones
         trimmed_jacobian = redundant_full_jacobian.subset(row_names=list(function_output),
-                                                          column_names=list(function_output))
+                                                          column_names=list(function_input))
 
         return trimmed_jacobian
 
+    def partial_derivative(self, function_output, function_input, states=None):
+        """
+        
+        :param function_output: A list of strings which is the output vector of the function
+        :param function_input: A list of strings which is the input vector to the function
+        :param states: the system states, if None will default to the current state
+        :return: 
+        """
+
+        if states is None:
+            states = self.states
+
+        full_partial_derivative = self.kinematic_system_tracker.full_partial_derivative(states)
+        return full_partial_derivative.subset(row_names=list(function_output),
+                                              column_names=list(function_input))
 
 class OnlineSystem(SystemState):
     """
@@ -198,6 +210,7 @@ class OfflineSystem(SystemState):
 
             # calculate each of the costs
             for cost_name in self.cost_functions:
+                print(timestep_merged_estimations)
                 costs[cost_name] = self.cost_functions[cost_name].cost(timestep_merged_estimations)
 
                 # if we are calculating basis vectors, do so for compatible costs and append to the list across time
