@@ -1,0 +1,146 @@
+#!/usr/bin/env python
+from abc import ABCMeta, abstractmethod
+from motion_costs import StateCost, WeightedCostCombination
+from phasespace.track_mocap import FrameTracker
+from copy import deepcopy
+
+
+class ControlLaw(object):
+    """
+    An abstract base class for a control law which computes controls based on system states and potentially derivatives
+    """
+    __metaclass__ = ABCMeta
+
+    @abstractmethod
+    def compute_control(self, states):
+        pass
+
+    def copy(self):
+        """
+        Deep copies itself
+        :return: an identical ControlLaw object
+        """
+        return deepcopy(self)
+
+
+class LearnableControlLaw(ControlLaw):
+    """
+    An abstract class for a ControlLaw which is parameterized in a way that these parameters can be learnt.
+    Implementations should provide the relevant functions to facilitate learning, but the actual learning code is beyond
+    the scope of this family of classes, as it may be able to be done in different ways.
+    """
+    __metaclass__ = ABCMeta
+
+
+class CostDescent(ControlLaw):
+
+    def __init__(self, rate, cost_function, inverse_dynamics):
+        """
+        Constructor
+        :param float rate: the rate at which to descend the cost, should be positive for descent, negative for ascent
+        :param StateCost cost_function: the cost function which is to be descended
+        :param inverse_dynamics: a function handle which maps states and state derivatives to an dict of inputs
+        """
+        assert isinstance(cost_function, StateCost), 'cost_function must be a StateCost object.'
+
+        self.rate = float(rate)
+        self.cost_function = cost_function
+        self.inverse_dynamics = inverse_dynamics
+
+    def compute_control(self, states):
+        """
+        Computes the control to apply to descend the cost
+        :param states: the current states
+        :return: a dict of controls
+        """
+
+        # This is a (1, X) Jacobian
+        partial_cost_states = self.cost_function.jacobian(states)
+
+        # This is a dict of states which gives the direction of maximal cost descent
+        # NOTE: Jacobian facilitates right multiplication with a dictionary.
+        #       This is equivalent to the dot product of a horizontal vector with the Jacobian, with ordering handled.
+        descending_dynamics = {self.cost_function.name: -self.rate} * partial_cost_states
+
+        return self.inverse_dynamics(states, descending_dynamics)
+
+
+class KinematicCostDescent(CostDescent):
+    """
+    A special case of Cost Descent where the input to the system is the pose velocity of a kinematic tree and the states
+    are the joint angles of this kinematic tree.
+    """
+
+    def __init__(self, rate, cost_function, frame_tracker, input_frame_name):
+        """
+        Constructor
+        :param float rate: the rate at which to descend the cost, should be positive for descent, negative for ascent
+        :param StateCost cost_function: the cost function which is to be descended
+        :param frame_tracker: the FrameTracker which will track the input frame
+        :param input_frame_name: the frame whose pose velocity is the input to the system
+        """
+        assert isinstance(frame_tracker, FrameTracker), 'frame_tracker must be a FrameTracker object.'
+        assert frame_tracker.is_tracked(input_frame_name), "frame_tracker must have frame '%s' attached" % \
+                                                           input_frame_name
+
+        self.frame_tracker = frame_tracker
+        self.input_frame_name = input_frame_name
+
+        super(KinematicCostDescent, self).__init__(rate, cost_function, self.inverse_dynamics)
+
+    def inverse_dynamics(self, states, state_derivatives):
+        """Returns the pose velocity of of the input frame for a particular state and state derivative"""
+        return self.inputs_states_jacobian(states) * state_derivatives
+
+    def inputs_states_jacobian(self, states):
+        """Returns the jacobian of the input frame"""
+        return self.frame_tracker.compute_jacobian('root', self.input_frame_name, states)
+
+
+class WeightedKinematicCostDescent(KinematicCostDescent, LearnableControlLaw):
+    """
+    A special case of KinematicCostDescent whereby the cost is a linear combination of base costs. The coefficients of
+    these base costs can thus be learnt.
+    """
+    def __init__(self, rate, cost_function, frame_tracker, input_frame_name):
+        """
+        Constructor
+        :param float rate: the rate at which to descend the cost, should be positive for descent, negative for ascent
+        :param WeightedCostCombination cost_function: the weighted cost function which is to be descended
+        :param frame_tracker: the FrameTracker which will track the input frame
+        :param input_frame_name: the frame whose pose velocity is the input to the system
+        """
+
+        assert isinstance(cost_function, WeightedCostCombination), \
+            'cost_function must be a WeightedCostCombination object.'
+
+        super(WeightedKinematicCostDescent, self).__init__(rate, cost_function, frame_tracker, input_frame_name)
+
+    def step_bases(self, states):
+        """
+        Provides the bases of inputs for each individual cost when unweighted
+        :param states: a dict of the current states
+        :return: a Jacobian object whose columns are the inputs for each individual base cost
+        """
+
+        # This is a (C, X) Jacobian object with each row being the direction of maximal descent for that basis cost
+        # function.
+        partial_cost_vector_states = self.cost_function.jacobian_bases(states)
+
+        # This is a (U, X) Jacobian object
+        partial_input_states = self.inputs_states_jacobian(states)
+
+        # This is a (U, C) = (U, X) * (X, C) Jacobian object
+        # Note we take the transpose and not the pseudo inverse since we are interested in the rows of
+        # partial_cost_vector_states which form the bases of the weighted gradient descent
+        return partial_input_states * partial_cost_vector_states.T()
+
+    def get_weights(self):
+        """Returns the current weightings"""
+        return self.cost_function.get_weights()
+
+    def set_weights(self, weights):
+        """Sets the current weights"""
+        self.cost_function.set_weights(weights)
+
+

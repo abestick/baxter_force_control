@@ -3,173 +3,128 @@ import rospy
 from motion_costs import WeightedCostCombination
 import numpy as np
 from collections import OrderedDict
+from system import Steppable
+import time
 
 
-class SystemState(object):
+class SystemState(Steppable):
 
-    def __init__(self, state_trackers, kinematic_system_tracker, cost_functions):
+    def __init__(self, state_trackers):
         """
         Constructor
         :param list state_trackers: a list of trackers which each contain a step function that return a dict of states
         :param dict cost_functions: a dict of StateCost objects which each contain a cost function that takes states
         """
-        self.state_trackers = state_trackers
-        self.cost_functions = cost_functions
-        self.kinematic_system_tracker = kinematic_system_tracker
-
-        self.state_sources = {state_name: tracker.name for tracker in self.state_trackers
+        self._state_trackers = state_trackers
+        self.state_sources = {state_name: tracker.name for tracker in self._state_trackers
                               for state_name in tracker.get_state_names()}
 
-        self.costs = dict.fromkeys(self.cost_functions.keys())
         self.states = dict.fromkeys(self.state_sources.keys())
-        self.observables = dict.fromkeys(self.kinematic_system_tracker.get_observables().keys())
-        self.system_states = self.states.copy().update(self.observables)
-
         self.iterations = 0
-        self.jacobian_groups = self.kinematic_system_tracker.jacobian_groups()
 
     def step(self):
         """
         Performs one cycle, getting the full state estimate from all the trackers and computing all the costs
         :return: 
         """
-        for i in range(len(self.state_trackers)):
-            self.states.update(self.state_trackers[i].step())
 
-        self.observables.update(self.kinematic_system_tracker.get_observables(self.states))
-        self.system_states.update(self.states)
-        self.system_states.update(self.observables)
-
-        for cost_name in self.cost_functions:
-            self.costs[cost_name] = self.cost_functions[cost_name].cost(self.states)
-
+        self._step_states()
         self.iterations += 1
+        return self.states.copy()
 
-    def old_partial_derivative(self, function_output, function_input, states=None):
-        """
-        
-        :param function_output: A list of strings which is the output vector of the function
-        :param function_input: A list of strings which is the input vector to the function
-        :param states: the system states, if None will default to the current state
-        :return: 
-        """
+    def _step_states(self):
+        for i in range(len(self._state_trackers)):
+            self.states.update(self._state_trackers[i].step())
 
-        if states is None:
-            states = self.states
 
-        # Create sets of each of the vectors
-        output_set = set(function_output)
-        input_set = set(function_input)
+class Differentiator(Steppable):
 
-        # Check for duplicates within a single vector
-        assert len(output_set) == len(function_output), "Duplicates found in function_output!"
-        assert len(input_set) == len(function_input), "Duplicates found in function_input!"
+    def __init__(self):
+        self.last_states = None
+        self.last_time = None
 
-        # We will create a dictionary of groups that these states pertain to
-        output_groups = {}
-        input_groups = {}
+    def step(self, states):
+        now = time.time()
+        if self.last_states is not None:
+            derivs = {state_name: (states[state_name] - self.last_states[state_name]) /
+                                (now - self.last_time) for state_name in states}
 
-        for group_name in self.jacobian_groups:
-            group_set = set(self.jacobian_groups[group_name])
+        else:
+            derivs = {state_name: 0.0 for state_name in states}
 
-            #  if there are some elements that are part of this group, add the group
-            if len(output_set & group_set) > 0:
-                output_groups[group_name] = output_set & group_set
+        self.last_states = states.copy()
+        self.last_time = now
 
-            if len(input_set & group_set) > 0:
-                input_groups[group_name] = output_set & group_set
+        return derivs
 
-        redundant_full_jacobian = None
 
-        # Now we know all the jacobians we will need subsets of to compute the partial derivative
-        for output_group_name in output_groups:
-            column_block = None
-            for input_group_name in input_groups:
-                # partial is a Jacobian object
-                partial = self.kinematic_system_tracker.partial_derivative(output_group_name, input_group_name, states)
-
-                # Stack this Jacobian ontop of the others. If column_block is None, it will return partial
-                column_block = partial.append_vertically(column_block)
-
-            redundant_full_jacobian = column_block.hstack(redundant_full_jacobian)
-
-        # Now we have a big jacobian with all the states needed and maybe some unnecessary ones
-        trimmed_jacobian = redundant_full_jacobian.subset(row_names=list(function_output),
-                                                          column_names=list(function_input))
-
-        return trimmed_jacobian
-
-    def partial_derivative(self, coordinate_frame, function_output, function_input, states=None):
-        """
-        
-        :param function_output: A list of strings which is the output vector of the function
-        :param function_input: A list of strings which is the input vector to the function
-        :param states: the system states, if None will default to the current state
-        :return: 
-        """
-
-        if states is None:
-            states = self.states
-
-        full_partial_derivative = self.kinematic_system_tracker.full_partial_derivative(coordinate_frame, states)
-        return full_partial_derivative.subset(row_names=list(function_output),
-                                              column_names=list(function_input))
-
-class OnlineSystem(SystemState):
+# TODO: Check if there's any useful bits of code before deleting all below
+class OnlineSystemState(SystemState):
     """
     Sets up a system state to track an online system. At initialization there is the option to fix the rate the system
-    will run at or to choose one of the trackers to run as fast as possible, and time the others of this "master". 
+    will run at or to choose one of the trackers to run as fast as possible, and time the others off this "master".
     """
 
-    def __init__(self, rate, state_trackers, cost_function):
+    def __init__(self, rate, state_trackers):
         """
         Constructor
         :param rate: if positive, the cycle rate in hertz, if negative, the index of the tracker to be the master whose
         rate all other trackers run at
         """
 
-        super(OnlineSystem, self).__init__(state_trackers, cost_function)
+        super(OnlineSystemState, self).__init__(state_trackers)
+
+        self.timer = None
+        self._timer_args = None
+        self.master_tracker = None
 
         if rate > 0:
-            self.timer = rospy.Timer(rospy.Duration(1.0/rate), self._step_wrapper)
+            self._timer_args = (rospy.Duration(1.0/rate), self._step_timer_callback)
+            self.start = self._start_timer
+            self.stop = self._stop_timer
 
         elif rate <= 0:
             # get the index of the master tracker
             master_idx = abs(rate)
 
             # set all trackers to update the system states at the end of each frame
-            for tracker in self.state_trackers:
-                tracker.register_callback(self._new_states_callback)
+            for tracker in self._state_trackers:
+                tracker.register_callback(self._update_states_callback)
 
             # create a copy of the trackers without the master
-            slaves = list(self.state_trackers)
+            slaves = list(self._state_trackers)
             slaves.pop(master_idx)
 
             # save a reference to the tracker to be master
-            self.master_tracker = self.state_trackers[master_idx]
+            self.master_tracker = self._state_trackers[master_idx]
 
             # set this tracker as the master and register the others as slaves, changing them to slave if needed
             self.master_tracker.set_master(True)
             self.master_tracker.enslave(slaves)
 
-            # since the master callbacks are called last and in the order they are registered, this callback is called
-            # once all the states have been updated so that we can update the costs and complete the cycle
-            self.master_tracker.register_callback(self._update_costs_callback)
+            self.start = self._start_master
+            self.stop = self._stop_master
 
-    def _new_states_callback(self, i, new_states, *args):
+    def _update_states_callback(self, i, new_states, *args):
         """This will be called by each tracker and passed the dicks of the states they estimate"""
         self.states.update(new_states)
 
-    def _update_costs_callback(self, *args):
-        """This will be called by the master once all states are updated and will update the cost and finish the loop"""
-        for cost_name in self.cost_functions:
-            self.costs[cost_name] = self.cost_functions[cost_name].cost(self.states)
-
-        self.iterations += 1
-
-    def _step_wrapper(self, event):
+    def _step_timer_callback(self, event):
         """A wrapper for the step function since timer callbacks are passed a timer event object"""
         self.step()
+
+    def _start_timer(self):
+        self.timer = rospy.Timer(*self._timer_args)
+
+    def _stop_timer(self):
+        self.timer.shutdown()
+
+    def _start_master(self):
+        self.master_tracker.start()
+
+    def _stop_master(self):
+        self.master_tracker.stop()
+
 
 
 class OfflineSystem(SystemState):
@@ -184,7 +139,7 @@ class OfflineSystem(SystemState):
         all_tracker_estimations = []
 
         # append the list with each trackers estimations over time
-        for tracker in self.state_trackers:
+        for tracker in self._state_trackers:
             tracker_estimations, _, _ = tracker.run(record=True)
             all_tracker_estimations.append(tracker_estimations)
 
@@ -210,7 +165,7 @@ class OfflineSystem(SystemState):
             for timestep_tracker_estimation in timestep_estimations:
                 timestep_merged_estimations.update(timestep_tracker_estimation)
 
-            timestep_merged_estimations.update(self.kinematic_system_tracker.get_observables(timestep_merged_estimations))
+            timestep_merged_estimations.update(self._frame_tracker.get_observables(timestep_merged_estimations))
 
             # append this timesteps full estimate
             all_merged_estimations.append(timestep_merged_estimations)

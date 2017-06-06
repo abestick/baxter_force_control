@@ -135,7 +135,7 @@ class WeightedCostCombination(StateCost):
         if weights is None:
             self.weights = {cost_func_name: 1.0/len(cost_funcs) for cost_func_name in self.cost_funcs}
         else:
-            self.weights = np.array(weights)/np.sum(weights)
+            self.weights = weights
 
         if len(cost_funcs) != len(self.weights):
             raise ValueError('Cost functions and weights lists must have same length')
@@ -156,3 +156,12 @@ class WeightedCostCombination(StateCost):
             jacobian_bases_dicts[cost_func_name] = self.cost_funcs[cost_func_name].jacobian(state_dict)
 
         return jacobian_bases_dicts
+
+    def get_basis_names(self):
+        return self.cost_funcs.keys()
+
+    def set_weights(self, weights):
+        self.weights = weights
+
+    def get_weights(self):
+        return self.weights
