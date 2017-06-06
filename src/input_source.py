@@ -216,3 +216,6 @@ class WeightedKinematicCostDescentEstimator(ControllerEstimator):
         weights = self.learn_weights()
         self.control_law.set_weights(weights)
         return Controller(self.control_law.copy())
+
+    def get_window_size(self):
+        return self.window_size

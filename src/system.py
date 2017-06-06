@@ -110,19 +110,20 @@ class BlockNode(object):
 
 class System(object):
 
-    def __init__(self, output_node, output_function=None, output_name='output'):
+    def __init__(self, output_nodes, output_names, output_functions=None):
         """
         Constructor
         :param output_node: the last node in the system pipeline
         :param output_function: a function that will process the output
         :param output_name: a name to assign the output of the last node
         """
-        assert isinstance(output_node, BlockNode), 'output_node must be a BlockNode object'
-        assert output_node.is_ready(), 'output_node is not fully connected'
+        assert all(isinstance(output_node, BlockNode) for output_node in output_nodes), \
+            'output_nodes must be a BlockNodes object'
+        assert all(output_node.is_ready() for output_node in output_nodes), 'output_nodes are not fully connected'
 
-        self.output_node = output_node
-        self.output_function = output_function
-        self.output_name = output_name
+        self.output_nodes = output_nodes
+        self.output_functions = output_functions if output_functions is not None else [None] * len(self.output_nodes)
+        self.output_names = output_names
         self.history = []
         self.start_time = 0
 
@@ -133,12 +134,14 @@ class System(object):
         :return: None
         """
         edges = {}
-        edges[self.output_name] = self.output_node.step(edges)
+        for output_name, output_node in zip(self.output_names, self.output_nodes):
+            edges[output_name] = output_node.step(edges)
         if record:
             self.history.append((time.time()-self.start_time, edges))
 
-        if self.output_function is not None:
-            self.output_function(edges[self.output_name])
+        for output_function, output_name in zip(self.output_functions, self.output_names):
+            if output_function is not None:
+                output_function(edges[output_name])
 
     def clear(self):
         """Clears the history"""
@@ -166,11 +169,13 @@ class System(object):
         :return: None
         """
         dot = Digraph("System Block Diagram", graph_attr={'rankdir': 'LR'})
-        dot.node(self.output_name, shape='none')
-        shape = 'ellipse' if self.output_node.is_source() else 'box'
-        dot.node(self.output_node.get_name(), shape=shape)
-        dot.edge(self.output_node.get_name(), self.output_name)
-        self._draw_inputs(dot, self.output_node)
+
+        for output_node, output_name in zip(self.output_nodes, self.output_names):
+            dot.node(output_name, shape='none')
+            shape = 'ellipse' if output_node.is_source() else 'box'
+            dot.node(output_node.get_name(), shape=shape)
+            dot.edge(output_node.get_name(), output_name)
+            self._draw_inputs(dot, output_node)
         dot.render(filename, view=True)
 
     def _draw_inputs(self, dot, block_node):

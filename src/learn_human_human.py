@@ -71,7 +71,8 @@ def main():
 
     # Define the control law we will estimate and an estimator
     weighted_descent = WeightedKinematicCostDescent(1.0, weighted_cost, frame_tracker, 'flap1')
-    weighted_descent_estimator = WeightedKinematicCostDescentEstimator(weighted_descent, window_size=40)
+    weighted_descent_estimator1 = WeightedKinematicCostDescentEstimator(weighted_descent, window_size=40)
+    weighted_descent_estimator2 = WeightedKinematicCostDescentEstimator(weighted_descent, window_size=0)
 
     # Define the system state tracker and input tracker
     system_state = SystemState([object_tracker])
@@ -80,15 +81,20 @@ def main():
     input_source = MocapInputTracker(object_tracker)
 
     # Build up the system nodes
-    output_node = BlockNode(weighted_descent_estimator, 'Weighted Cost Descent Estimator')
-    output_node.add_raw_input(system_state, "System State Tracker", 'states')
-    output_node.add_raw_input(input_source, "Hand Pose Velocity Tracker", 'inputs')
+
+    output_nodes = [BlockNode(weighted_descent_estimator,
+                              'Weighted Cost Descent Estimator (%d)'%weighted_descent_estimator.get_window_size())
+                    for weighted_descent_estimator in [weighted_descent_estimator1, weighted_descent_estimator2]]
+    for output_node in output_nodes:
+        output_node.add_raw_input(system_state, "System State Tracker", 'states')
+        output_node.add_raw_input(input_source, "Hand Pose Velocity Tracker", 'inputs')
 
     # An example of how we might want to pipe system output to something when running online
     def some_function_that_uses_the_weights(w):
         pass
 
-    system = System(output_node, output_function=some_function_that_uses_the_weights, output_name='weights')
+    system = System(output_nodes, ['weights1', 'weights2'],
+                    output_functions=[some_function_that_uses_the_weights, None])
     system.draw(filename=args.block_diagram)
 
     # all the data for every timestep
