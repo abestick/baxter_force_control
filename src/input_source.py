@@ -155,7 +155,7 @@ class WeightedKinematicCostDescentEstimator(ControllerEstimator):
             'control_law must be a WeightedKinematicCostDescent object'
 
         super(WeightedKinematicCostDescentEstimator, self).__init__(control_law)
-        self.weight_names = list(self.control_law.get_weights.keys())
+        self.weight_names = list(self.control_law.get_weights().keys())
 
         self.window_size = window_size
 

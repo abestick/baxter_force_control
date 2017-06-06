@@ -56,6 +56,10 @@ class BlockNode(object):
 
         self.inputs[step_arg_name] = other_node
 
+    def add_raw_input(self, other_steppable, block_name, step_arg_name, replace=True):
+        other_node = BlockNode(other_steppable, block_name)
+        self.add_input(other_node, step_arg_name, replace)
+
     def is_locally_ready(self):
         """
         Checks if all the inputs of the step function have been connected to another node
@@ -73,7 +77,7 @@ class BlockNode(object):
         Checks if all inputs are satisfied recursively
         :return:
         """
-        return self.is_locally_ready() and all(input_node.is_ready() for input_node in self.inputs.items())
+        return self.is_locally_ready() and all(input_node.is_ready() for input_node in self.inputs.values())
 
     def step(self, save_dict=None):
         """
@@ -120,7 +124,7 @@ class System(object):
         self.output_function = output_function
         self.output_name = output_name
         self.history = []
-        self.start_time=0
+        self.start_time = 0
 
     def step(self, record):
         """
@@ -162,7 +166,7 @@ class System(object):
         :return: None
         """
         dot = Digraph("System Block Diagram", graph_attr={'rankdir': 'LR'})
-        dot.node(self.output_name, shape='plain_text')
+        dot.node(self.output_name, shape='none')
         shape = 'ellipse' if self.output_node.is_source() else 'box'
         dot.node(self.output_node.get_name(), shape=shape)
         dot.edge(self.output_node.get_name(), self.output_name)

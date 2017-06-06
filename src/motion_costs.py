@@ -40,13 +40,13 @@ class StateCost(object):
         """Returns a list of the observation variable names needed by this cost function. Derived
         classes must provide the list required_obs_vars in the constructor.
         """
-        return self.required_obs_vars
+        return self._required_obs_vars
 
     def get_required_state_vars(self):
         """Returns a list of the state variable names needed by this cost function. Derived
         classes must provide the list required_state_vars in the constructor.
         """
-        return self.required_state_vars
+        return self._required_state_vars
 
     def gradient(self, state_dict):
         """Computes the derivative of this cost function with respect to each of the state variables
@@ -144,7 +144,7 @@ class ManipulabilityCost(StateCost):
         super(ManipulabilityCost, self).__init__(name,
                 get_object_manip_jacobian, # obs_func
                 object_joint_names, # required_state_vars
-                required_obs_vars) #TODO: what are the names of the required obs vars?
+                intent.keys()) #TODO: what are the names of the required obs vars?
 
         # assert set(intent) <= set(self.intent_states), 'intent must be a dict with a subset of these keys: %s' % \
         #                                                self.intent_states
@@ -158,15 +158,18 @@ class ManipulabilityCost(StateCost):
         self.intent_array = np.array(intent_list)
 
     def cost(self, state_dict):
-        assert set(self.get_required_obs_vars()) <= set(state_dict.keys()), 'state_dict must contain the required state ' \
-                                                                        'variables.\nrequired: %s\nstate_dict:%s' % \
-                                                                        (self.get_required_obs_vars(), state_dict.keys())
+        assert set(self.get_required_state_vars()) <= set(state_dict.keys()), 'state_dict must contain the required ' \
+                                                                              'state variables.\nrequired: %s\n' \
+                                                                              'state_dict:%s' % \
+                                                                              (self.get_required_state_vars(),
+                                                                               state_dict.keys())
 
-        # Get the dict of columns for the jacobian
+        # Get the Jacobian object
         jacobian = self._obs_func(state_dict)
 
-        # Subset for the dimensions we care about
-        jacobian = jacobian.subset(row_names=self.intent.keys())
+        # Subset for the dimensions we care about, this will throw an error if the required_obs_vars are not a subset
+        # of the Jacobian rows
+        jacobian = jacobian.subset(row_names=self.get_required_obs_vars())
 
         # Invert, multiply with the intent array and take the norm (squared ?)
         return npla.norm(jacobian.pinv()*self.intent) ** 2
@@ -199,7 +202,7 @@ class WeightedCostCombination(StateCost):
         if weights is None:
             self.weights = {cost_func_name: 1.0/len(cost_funcs) for cost_func_name in self.cost_funcs}
         else:
-            self.weights = np.array(weights)/np.sum(weights)
+            self.weights = dict(zip(self.cost_funcs.keys(), np.array(weights)/np.sum(weights)))
         if len(cost_funcs) != len(self.weights):
             raise ValueError('Cost functions and weights lists must have same length')
         required_obs_vars = list(set().union(*[cost_func.get_required_obs_vars() for cost_func in cost_funcs]))
@@ -223,10 +226,9 @@ class WeightedCostCombination(StateCost):
         return np.array([self.cost_funcs[cost_func_name].cost(state_dict) for cost_func_name in self.cost_funcs])
 
     def gradient_bases(self, state_dict):
-        gradient_bases_dicts = {}
-        for cost_func_name in self.cost_funcs:
-            gradient_bases_dicts[cost_func_name] = self.cost_funcs[cost_func_name].gradient(state_dict)
-        return gradient_bases_dicts
+        # This is a (C, X) Jacobian object with each row being the direction of maximal ascent for that basis cost
+        # function.
+        return Jacobian.vstack([cost_func.gradient(state_dict) for cost_func in self.cost_funcs.values()])
 
     def get_basis_names(self):
         return self.cost_funcs.keys()

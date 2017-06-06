@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 from abc import ABCMeta, abstractmethod
 from motion_costs import StateCost, WeightedCostCombination
-from phasespace.track_mocap import FrameTracker
+from kinmodel.track_mocap import FrameTracker
 from copy import deepcopy
 
 
@@ -123,7 +123,7 @@ class WeightedKinematicCostDescent(KinematicCostDescent, LearnableControlLaw):
         :return: a Jacobian object whose columns are the inputs for each individual base cost
         """
 
-        # This is a (C, X) Jacobian object with each row being the direction of maximal descent for that basis cost
+        # This is a (C, X) Jacobian object with each row being the direction of maximal ascent for that basis cost
         # function.
         partial_cost_vector_states = self.cost_function.jacobian_bases(states)
 
@@ -133,6 +133,7 @@ class WeightedKinematicCostDescent(KinematicCostDescent, LearnableControlLaw):
         # This is a (U, C) = (U, X) * (X, C) Jacobian object
         # Note we take the transpose and not the pseudo inverse since we are interested in the rows of
         # partial_cost_vector_states which form the bases of the weighted gradient descent
+        # u = B(x).pinv * dx_star = J(x) * (w1*dx1_star + w2*dx2_star + ... + wN*dxN_star) = J(x) * Jc_vec(x).T * w
         return partial_input_states * partial_cost_vector_states.T()
 
     def get_weights(self):
