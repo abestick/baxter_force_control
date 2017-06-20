@@ -5,22 +5,15 @@ import numpy as np
 from collections import OrderedDict
 from system import Steppable
 import time
+from abc import ABCMeta, abstractmethod
 
 
 class SystemState(Steppable):
 
-    def __init__(self, state_trackers):
-        """
-        Constructor
-        :param list state_trackers: a list of trackers which each contain a step function that return a dict of states
-        :param dict cost_functions: a dict of StateCost objects which each contain a cost function that takes states
-        """
-        self._state_trackers = state_trackers
-        self.state_sources = {state_name: tracker.name for tracker in self._state_trackers
-                              for state_name in tracker.get_state_names()}
+    __metaclass__ = ABCMeta
 
-        self.states = dict.fromkeys(self.state_sources.keys())
-        self.iterations = 0
+    def __init__(self):
+        self._states = {}
 
     def step(self):
         """
@@ -29,12 +22,25 @@ class SystemState(Steppable):
         """
 
         self._step_states()
-        self.iterations += 1
-        return self.states.copy()
+        return self._states.copy()
 
-    def _step_states(self):
-        for i in range(len(self._state_trackers)):
-            self.states.update(self._state_trackers[i].step())
+    def get_state_names(self):
+        return self._states.keys()
+
+    @abstractmethod
+    def _step_states(self, **kwargs):
+        pass
+
+
+class MocapSystemState(SystemState):
+
+    def __init__(self, mocap_trackers):
+        self._mocap_trackers = mocap_trackers
+        super(MocapSystemState, self).__init__()
+
+    def _step_states(self, frame):
+        for mocap_tracker in self._mocap_trackers:
+            self._states.update(mocap_tracker.process_frame(frame))
 
 
 class Differentiator(Steppable):
@@ -107,7 +113,7 @@ class OnlineSystemState(SystemState):
 
     def _update_states_callback(self, i, new_states, *args):
         """This will be called by each tracker and passed the dicks of the states they estimate"""
-        self.states.update(new_states)
+        self._states.update(new_states)
 
     def _step_timer_callback(self, event):
         """A wrapper for the step function since timer callbacks are passed a timer event object"""

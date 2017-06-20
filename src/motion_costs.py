@@ -172,7 +172,8 @@ class ManipulabilityCost(StateCost):
         jacobian = jacobian.subset(row_names=self.get_required_obs_vars())
 
         # Invert, multiply with the intent array and take the norm (squared ?)
-        return npla.norm(jacobian.pinv()*self.intent) ** 2
+        joint_velocities = jacobian.pinv()*self.intent
+        return npla.norm(joint_velocities.values()) ** 2
 
 
 class BasisManipulabilityCost(ManipulabilityCost):

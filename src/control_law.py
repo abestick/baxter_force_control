@@ -125,7 +125,7 @@ class WeightedKinematicCostDescent(KinematicCostDescent, LearnableControlLaw):
 
         # This is a (C, X) Jacobian object with each row being the direction of maximal ascent for that basis cost
         # function.
-        partial_cost_vector_states = self.cost_function.jacobian_bases(states)
+        partial_cost_vector_states = self.cost_function.gradient_bases(states)
 
         # This is a (U, X) Jacobian object
         partial_input_states = self.inputs_states_jacobian(states)

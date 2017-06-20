@@ -1,15 +1,14 @@
 #!/usr/bin/env python
 import argparse
 import numpy as np
-from kinmodel.track_mocap import KinematicTreeTracker, WristTracker, KinematicTreeExternalFrameTracker
-from system_state import SystemState
-from system import BlockNode, System
+from kinmodel.track_mocap import KinematicTreeTracker, KinematicTreeExternalFrameTracker, MocapFrameTracker
+from system import ForwardBlockNode, ForwardSystem, ForwardRoot
 from control_law import WeightedKinematicCostDescent
-from input_source import MocapInputTracker, WeightedKinematicCostDescentEstimator
+from steppables import MocapFrameEstimator, WeightedKinematicCostDescentEstimator, MocapSystemState, MocapMeasurement, \
+    Differentiator, Transformer
 from motion_costs import WeightedCostCombination, BasisManipulabilityCost, QuadraticDisplacementCost
 import phasespace.load_mocap as load_mocap
 import kinmodel
-import json
 
 
 FRAMERATE = 50
@@ -30,18 +29,17 @@ def main():
     # Stack all the trials
     while 'full_sequence_' + str(trials) in data.keys():
         trials += 1
-    print('Number of Trials: %d' % trials)
+    print('Number of trials: %d' % trials)
     mocap_data = [data['full_sequence_' + str(trial)] for trial in range(trials)]
     all_trials = np.concatenate(mocap_data, axis=2)
 
     # Put into a MocapArray
-    ukf_mocap = load_mocap.ArrayMocapSource(all_trials, FRAMERATE)
+    mocap_array = load_mocap.ArrayMocapSource(all_trials, FRAMERATE)
+
+    print('Number of data points: %d' % len(mocap_array))
 
     # Initialize the tree
     kin_tree = kinmodel.KinematicTree(json_filename=args.kinmodel_json_optimized)
-
-    # Initialize the trackers
-    object_tracker = KinematicTreeTracker('object', kin_tree, ukf_mocap)
 
     # Initialize the frame tracker and attach frames of interest
     frame_tracker = KinematicTreeExternalFrameTracker(kin_tree.copy())
@@ -70,36 +68,60 @@ def main():
     weighted_cost = WeightedCostCombination('object_costs', [config_cost, manip_cost_x, manip_cost_y, manip_cost_z])
 
     # Define the control law we will estimate and an estimator
+    window_sizes = [40, len(mocap_array)]
     weighted_descent = WeightedKinematicCostDescent(1.0, weighted_cost, frame_tracker, 'flap1')
-    weighted_descent_estimator1 = WeightedKinematicCostDescentEstimator(weighted_descent, window_size=40)
-    weighted_descent_estimator2 = WeightedKinematicCostDescentEstimator(weighted_descent, window_size=0)
+    weighted_descent_estimators = [WeightedKinematicCostDescentEstimator(weighted_descent, window_size=i) for i in window_sizes]
 
-    # Define the system state tracker and input tracker
-    system_state = SystemState([object_tracker])
+    # Define the measurement block
+    mocap_measurement = MocapMeasurement(mocap_array, 'mocap_measurement')
 
-    # TODO
-    input_source = MocapInputTracker(object_tracker)
+    # Define the frame tracker used for the estimator of the input
+    joints = kin_tree.get_joints()
+    flap_point_strings = kin_tree.get_features(joints['joint3']).keys()
+    flap_points = [int(s.split('_')[1]) for s in flap_point_strings]
+    base_point_strings = kin_tree.get_features(joints['joint1']).keys()
+    base_points = [int(s.split('_')[1]) for s in base_point_strings]
+
+    input_frame_tracker = MocapFrameTracker('input_tracker', flap_points)
+    base_frame_tracker = MocapFrameTracker('base_tracker', base_points)
+    input_frame_estimator = MocapFrameEstimator(input_frame_tracker, 'flap1')
+    input_estimator = Differentiator()
+    base_estimator = MocapFrameEstimator(base_frame_tracker, 'base')
+    input_transformer = Transformer()
+
+    # Define the system state tracker used to estimate the system state
+    kin_tree_tracker = KinematicTreeTracker('tree_tracker', kin_tree)
+    system_state = MocapSystemState([kin_tree_tracker])
 
     # Build up the system nodes
+    measurement_node = ForwardBlockNode(mocap_measurement, 'Mocap Measurement', 'raw_mocap')
+    input_frame_node = ForwardBlockNode(input_frame_estimator, 'Input Frame Estimator', 'input_flap')
+    system_state_node = ForwardBlockNode(system_state, 'State Estimator', 'object_joints')
+    differentiator_node = ForwardBlockNode(input_estimator, 'Differentiator', 'd_input_flap')
+    base_frame_node = ForwardBlockNode(base_estimator, 'Base Frame Estimator', 'base_transform')
+    transformer_node = ForwardBlockNode(input_transformer, 'Base Frame Transformer', 'd_base_input_flap')
+    output_nodes = [ForwardBlockNode(weighted_descent_estimator,'Weighted Cost Descent Estimator (%d)'
+                                     % weighted_descent_estimator.get_window_size(),
+                                     'weights_%d' % weighted_descent_estimator.get_window_size())
+                    for weighted_descent_estimator in weighted_descent_estimators]
 
-    output_nodes = [BlockNode(weighted_descent_estimator,
-                              'Weighted Cost Descent Estimator (%d)'%weighted_descent_estimator.get_window_size())
-                    for weighted_descent_estimator in [weighted_descent_estimator1, weighted_descent_estimator2]]
+    measurement_node.add_output(input_frame_node, 'measurement')
+    measurement_node.add_output(system_state_node, 'measurement')
+    measurement_node.add_output(base_frame_node, 'measurement')
+    input_frame_node.add_output(differentiator_node, 'states')
+    base_frame_node.add_output(transformer_node, 'transform')
+    differentiator_node.add_output(transformer_node, 'primitives')
     for output_node in output_nodes:
-        output_node.add_raw_input(system_state, "System State Tracker", 'states')
-        output_node.add_raw_input(input_source, "Hand Pose Velocity Tracker", 'inputs')
+        transformer_node.add_output(output_node, 'inputs')
+        system_state_node.add_output(output_node, 'states')
 
-    # An example of how we might want to pipe system output to something when running online
-    def some_function_that_uses_the_weights(w):
-        pass
+    root = ForwardRoot([measurement_node])
 
-    system = System(output_nodes, ['weights1', 'weights2'],
-                    output_functions=[some_function_that_uses_the_weights, None])
+    system = ForwardSystem(root)
     system.draw(filename=args.block_diagram)
 
     # all the data for every timestep
-    all_data = system.run(record=True)
-
+    all_times, all_data = zip(*system.run(record=True, print_steps=50))
     # convert list of dicts to a dict of lists
     trajectories = {element: [] for element in all_data[-1]}
     for time_slice in all_data:
@@ -113,7 +135,7 @@ def main():
     # store the trajectory of every element in the system
     with open(args.system_history, 'w') as output_file:
         np.savez_compressed(output_file, **trajectories)
-        print('System history saved to ' + args.output_data_npz)
+        print('System history saved to ' + args.system_history)
 
 
 if __name__ == '__main__':
