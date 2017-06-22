@@ -228,7 +228,7 @@ class WeightedKinematicCostDescentEstimator(ControllerEstimator):
         """
         input_arrays, input_bases_arrays = zip(*self.data_buffer)
         targets = np.concatenate(input_arrays)
-        features = np.concatenate(input_bases_arrays, axis=0)
+        features = -np.concatenate(input_bases_arrays, axis=0)
 
         return {weight_name: val for weight_name, val in zip(self.weight_names, np.linalg.lstsq(features, targets)[0])}
 
