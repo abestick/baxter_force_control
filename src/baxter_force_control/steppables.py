@@ -5,6 +5,7 @@ import time
 import numpy as np
 from control_law import LearnableControlLaw, ControlLaw, WeightedKinematicCostDescent
 from collections import deque
+from kinmodel import new_geometric_primitive, GeometricPrimitive
 
 
 class Steppable(object):
@@ -23,29 +24,140 @@ class Steppable(object):
         return getargspec(self.step)[0][1:]
 
 
-class Differentiator(Steppable):
+class Constant(Steppable):
+    """
+    Produces a constant output
+    """
 
-    def __init__(self):
-        self.last_states = None
-        self.last_time = None
+    def __init__(self, constant_dict):
+        self.values = constant_dict
+
+    def step(self):
+        return self.values
+
+
+class Mask(Steppable):
+    """
+    Masks its input using a constant dictionary
+    """
+    def __init__(self, mask_dict):
+        self.mask = mask_dict
 
     def step(self, states):
-        now = time.time()
+        # mask the required keys
+        states.update(self.mask)
+        return states
+
+
+class Selector(Steppable):
+    """
+    Extracts a subset from its input, potentially also renaming
+    """
+    def __init__(self, keys):
+        """
+        Contructor
+        :param keys: a dict or a list of keys. If a dict, keys map to new key names to be assinged on selection
+        """
+        if isinstance(keys, dict):
+            self.keys = keys
+
+        else:
+            self.keys = {key:key for key in keys}
+
+    def step(self, states):
+        return {new_key: states[key] for key, new_key in self.keys.items() if key in states}
+
+
+class Delay(Steppable):
+    """
+    Adds a delay of a set number of steps
+    """
+
+    def __init__(self, num_delays):
+        self.delays = num_delays
+        self.history = deque([{}]*num_delays, maxlen=num_delays)
+
+    def step(self, states):
+        self.history.append(states)
+        return self.history.popleft()
+
+
+class Averager(Steppable):
+    """
+    Computes the average over a particular time window
+    """
+
+    def __init__(self, window_size):
+        self.window_size = window_size
+
+        self.data_buffer = deque(maxlen=window_size)
+
+        self.order = None
+
+    def step(self, states):
+        # Vectorize the inputs so that they match each other
+        self.data_buffer.append(self._vectorize(states))
+
+        # if we have enough data to average over our window size, perform the mean and return it
+        if len(self.data_buffer) == self.window_size:
+            average = np.mean(self.data_buffer, axis=0)
+            return {key: average[i] for i, key in enumerate(self.order)}
+
+        # otherwise return an empty dict
+        else:
+            return {}
+
+    def _vectorize(self, states):
+        """
+        Puts the values in the same order as the first
+        :param states: the state dict
+        :return: a numpy array
+        """
+
+        # if the order has not been set yet
+        if self.order is None:
+            self.order, vectors = zip(*states.items())
+            return np.array(vectors, dtype=object)
+
+        else:
+            return np.array([states[key] for key in self.order], dtype=object)
+
+
+class Differentiator(Steppable):
+    """
+    Differentiates the input
+    """
+    def __init__(self, fixed_step=None):
+        self.fixed_step = fixed_step
+        self.last_states = None
+        self.last_time = 0
+
+    def step(self, states):
+
+        # if running on a fixed time step, this will assign that, otherwise take the difference from last iteration
+        # if there is no fixed and this is the first step, step will be the current time, but will not be used this step
+        step = time.time() - self.last_time if self.fixed_step is None else self.fixed_step
+
+        # if we are not on the first step compute the derivatives
         if self.last_states is not None:
             derivs = {state_name: (states[state_name] - self.last_states[state_name]) /
-                                (now - self.last_time) for state_name in states}
+                                step for state_name in states}
 
+        # otherwise set to zero
         else:
             derivs = {state_name: states[state_name] - states[state_name] for state_name in states}
 
+        # update the delay attribute and the last time
         self.last_states = states.copy()
-        self.last_time = now
+        self.last_time += step
 
         return derivs
 
 
 class MeasurementSource(Steppable):
-
+    """
+    An abstract base class for steppables that provide measurements
+    """
     __metaclass__ = ABCMeta
 
     @abstractmethod
@@ -54,7 +166,9 @@ class MeasurementSource(Steppable):
 
 
 class MocapMeasurement(MeasurementSource):
-
+    """
+    Produces measurements from a mocap source
+    """
     def __init__(self, mocap_source, source_name):
         self._mocap_source = mocap_source
         self._mocap_stream = mocap_source.get_stream()
@@ -66,7 +180,9 @@ class MocapMeasurement(MeasurementSource):
 
 
 class Estimator(Steppable):
-
+    """
+    An abstract base class for
+    """
     __metaclass__ = ABCMeta
 
     @abstractmethod
@@ -75,26 +191,34 @@ class Estimator(Steppable):
 
 
 class MocapFrameEstimator(Estimator):
-
+    """
+    Estimates a transform to a particular tracked frame in the mocap data
+    """
     def __init__(self, mocap_frame_tracker, tracked_frame_name):
         self._mocap_frame_tracker = mocap_frame_tracker
         self._frame_name = tracked_frame_name
 
     def step(self, measurement):
+        # make sure the dictionary has a single value which is the mocap frame
         assert len(measurement)==1, 'can only pass a single frame to the MocapFrameEstimator step function'
 
+        # extract the frame and return the transform estimate
         (_, frame), = measurement.items()
         return {self._frame_name: self._mocap_frame_tracker.process_frame(frame)}
 
 
 class Transformer(Steppable):
-
+    """
+    Transforms geometric primitives with a Transform object
+    """
     def step(self, transform, primitives):
         assert len(transform)==1, 'can only pass a single transform to the Transformer step function'
 
-        # the world to base transform
+        # extract the transform
         (_, transform), = transform.items()
         return_dict = {}
+
+        # apply to each of the primitives
         for primitive_name, primitive in primitives.items():
             return_dict[primitive_name] = transform.transform(primitive)
 
@@ -102,7 +226,9 @@ class Transformer(Steppable):
 
 
 class SystemState(Steppable):
-
+    """
+    An abstract base class for classes that provide the states of a system
+    """
     __metaclass__ = ABCMeta
 
     def __init__(self):
@@ -117,7 +243,9 @@ class SystemState(Steppable):
 
 
 class MocapSystemState(SystemState, Estimator):
-
+    """
+    Estimates the state of a system based on mocap data
+    """
     def __init__(self, mocap_trackers):
         self._mocap_trackers = mocap_trackers
         super(MocapSystemState, self).__init__()
@@ -137,12 +265,17 @@ class Controller(Steppable):
     A Steppable which implements a control law on the current states
     """
 
-    def __init__(self, control_law):
+    def __init__(self, control_law, output_type=None):
         """
         Constructor
         :param ControlLaw control_law: The control law used to calculate inputs
         """
         assert isinstance(control_law, ControlLaw), 'control_law must be a ControlLaw object'
+
+        if output_type is not None:
+            assert isinstance(output_type, GeometricPrimitive)
+
+        self.output_type = output_type
 
         self.control_law = control_law
 
@@ -153,6 +286,23 @@ class Controller(Steppable):
     def controller_type(self):
         """Returns the type of control law being implemented"""
         return str(type(self.control_law))
+
+
+class DynamicController(Controller):
+    """
+    A parameterized controller whose parameters may change over time
+    """
+    def __init__(self, control_law, persistent_control=False):
+        self.persistent_control = persistent_control
+        super(DynamicController, self).__init__(control_law)
+
+    def step(self, states, parameters):
+        if len(parameters) == 0 and not self.persistent_control:
+            return {}
+
+        else:
+            self.control_law.set_parameters(parameters)
+            return super(DynamicController, self).step(states)
 
 
 class ControllerEstimator(Steppable):
@@ -187,7 +337,7 @@ class WeightedKinematicCostDescentEstimator(ControllerEstimator):
             'control_law must be a WeightedKinematicCostDescent object'
 
         super(WeightedKinematicCostDescentEstimator, self).__init__(control_law)
-        self.weight_names = list(self.control_law.get_weights().keys())
+        self.weight_names = list(self.control_law.get_parameters().keys())
 
         self.window_size = window_size if window_size is not None else -1
 
@@ -214,7 +364,7 @@ class WeightedKinematicCostDescentEstimator(ControllerEstimator):
         # if we have enough data to regress over our window size, perform the regression and return the weights
         if len(self.data_buffer) == self.window_size:
             weights = self.learn_weights()
-            self.control_law.set_weights(weights)
+            self.control_law.set_parameters(weights)
             return weights
 
         # otherwise return an empty dict
@@ -240,14 +390,17 @@ class WeightedKinematicCostDescentEstimator(ControllerEstimator):
         """
         self.buffers.append(buffer)
 
+    def get_controller(self):
+        return Controller(self.control_law.copy())
+
     def learn_controller(self):
         """
         Learns the weights and returns a Controller object which uses the same ControlLaw and the learnt weights
         :return: Controller
         """
         weights = self.learn_weights()
-        self.control_law.set_weights(weights)
-        return Controller(self.control_law.copy())
+        self.control_law.set_parameters(weights)
+        return self.get_controller()
 
     def get_window_size(self):
         return self.window_size

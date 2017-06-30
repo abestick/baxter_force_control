@@ -17,6 +17,7 @@ class StateCost(object):
     required_obs_vars: list(string) - keys which must be present in obs_func's output dict
     """
     __metaclass__ = ABCMeta
+
     def __init__(self, name, obs_func, required_state_vars, required_obs_vars):
         self.name = name
         self._obs_func = obs_func
@@ -217,6 +218,7 @@ class WeightedCostCombination(StateCost):
             required_obs_vars)
 
     def cost(self, state_dict):
+
         obs = self._obs_func(state_dict)
         total_error = 0
         for cost_func_name in self.cost_funcs:
@@ -235,7 +237,10 @@ class WeightedCostCombination(StateCost):
         return self.cost_funcs.keys()
 
     def set_weights(self, weights):
-        self.weights = weights
+        self.weights.update(weights)
 
     def get_weights(self):
         return self.weights
+
+    def scale(self, scale):
+        self.weights = {k: v * scale for k, v in self.weights.items()}

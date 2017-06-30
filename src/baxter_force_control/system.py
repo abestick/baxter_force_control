@@ -2,11 +2,17 @@
 from __future__ import print_function
 from abc import ABCMeta, abstractmethod
 from graphviz import Digraph
-import time, sys
+import time
+import pandas as pd
 from steppables import Steppable
 
 
 class Node(object):
+    """
+    An abstract base class for system nodes. A node will have a step function which performs an iteration of its part of
+    the system, and an is_connected function which asserts that the node graph is properly connected from this node
+    onward.
+    """
 
     __metaclass__ = ABCMeta
 
@@ -21,7 +27,9 @@ class Node(object):
 
 class BlockNode(Node):
     """
-    A class which contains a Steppable, and connects other BlockNode's Steppables to it's own Steppable's step function
+    A class which contains a Steppable, and connects other BlockNode's Steppables to it's own Steppable's step function.
+    It may be implemented as a Forward or Backward BlockNode, depending on the desired direction of node dependencies in
+    the graph.
     """
 
     __metaclass__ = ABCMeta
@@ -38,12 +46,15 @@ class BlockNode(Node):
         self._step_arg_names = steppable.get_step_inputs()
 
     def get_step_arg_names(self):
+        """Returns the arguments required for the Steppable's step function"""
         return self._step_arg_names
 
     def steppable_type(self):
+        """Returns the type of the Steppable"""
         return type(self._steppable)
 
     def get_name(self):
+        """Returns the BlockNode's name"""
         return self._name
 
     def is_source(self):
@@ -52,6 +63,11 @@ class BlockNode(Node):
 
 
 class ForwardBlockNode(BlockNode):
+    """
+    An implementation of BlockNode for which an iteration of the graph is initiated by sources then propogated forward
+    to outputs. The Forward implementation is slightly more complicated and slower, but does not run into issues when
+    two nodes share the same input.
+    """
 
     def __init__(self, steppable, name, output_name):
         super(ForwardBlockNode, self).__init__(steppable, name)
@@ -61,6 +77,11 @@ class ForwardBlockNode(BlockNode):
         self._connected_inputs = {arg_name: False for arg_name in self._step_arg_names}
 
     def _connect_input(self, step_arg_name):
+        """
+        Private method for updating the satisfied dependencies of the step function
+        :param step_arg_name: the name of the argument being connected
+        :return: a bool, True indicating that argument was not already satisfied and has now been marked as connected
+        """
         if self._connected_inputs[step_arg_name]:
             return False
 
@@ -69,6 +90,11 @@ class ForwardBlockNode(BlockNode):
             return True
 
     def _disconnect_input(self, step_arg_name):
+        """
+        Marks an input as no longer connected
+        :param step_arg_name: the name of the argument being connected
+        :return:
+        """
         self._connected_inputs[step_arg_name] = False
 
     def add_output(self, other_node, step_arg_name):
@@ -147,9 +173,14 @@ class ForwardBlockNode(BlockNode):
     def get_output_nodes(self):
         return self._output_nodes
 
+    def __str__(self):
+        return '[ForwardBlockNode "%s"]' % self._name
+
 
 class ForwardRoot(Node):
-
+    """
+    A node which is the root of the graph, it contains all the source nodes of the systems (which have no input)
+    """
     def __init__(self, source_nodes):
         self._source_nodes = source_nodes
 
@@ -242,7 +273,9 @@ class BackwardBlockNode(BlockNode):
 
 
 class BackwardRoot(Node):
-
+    """
+    A node which is the root of the graph, it contains the single output node
+    """
     def __init__(self, output_node, output_name):
         self._output_node = output_node
         self._output_name = output_name
@@ -266,7 +299,9 @@ class BackwardRoot(Node):
 
 
 class System(object):
-
+    """
+    A class which contains a graph of nodes
+    """
     __metaclass__ = ABCMeta
 
     def __init__(self, root_node, output_function=None):
@@ -279,7 +314,8 @@ class System(object):
 
         self.root_node = root_node
         self.output_function = output_function
-        self.history = []
+        self.history = pd.DataFrame()
+        self._all_edges = {}
         self.start_time = 0
 
     def step(self, record):
@@ -291,14 +327,17 @@ class System(object):
         edges = {}
         output = self.root_node.step(edges)
         if record:
-            self.history.append((time.time()-self.start_time, edges))
+            edges['time'] = {'time':time.time()-self.start_time}
+            self._all_edges.update(edges)
+            self.history = self.history.append([{'%s_%s'%(g, k):v for g, d in edges.items() for k,v in d.items()}], ignore_index=True)
 
         if self.output_function is not None:
             self.output_function(output)
 
     def clear(self):
         """Clears the history"""
-        self.history = []
+        self._all_edges = {}
+        self.history = pd.DataFrame()
 
     def run(self, record=True, print_steps=-1):
         """
@@ -316,7 +355,8 @@ class System(object):
             except (EOFError, KeyboardInterrupt):
                 break
 
-        return list(self.history)
+        groups = {group: self._all_edges[group].keys() for group in self._all_edges}
+        return self.history, self.history.groupby(groups)
 
 
 class ForwardSystem(System):

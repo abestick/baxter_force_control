@@ -1,15 +1,17 @@
 #!/usr/bin/env python
 import argparse
 import numpy as np
-from kinmodel.track_mocap import KinematicTreeTracker, KinematicTreeExternalFrameTracker, MocapFrameTracker
-from system import ForwardBlockNode, ForwardSystem, ForwardRoot
-from control_law import WeightedKinematicCostDescent
-from steppables import MocapFrameEstimator, WeightedKinematicCostDescentEstimator, MocapSystemState, MocapMeasurement, \
-    Differentiator, Transformer
-from motion_costs import WeightedCostCombination, BasisManipulabilityCost, QuadraticDisplacementCost
-import phasespace.load_mocap as load_mocap
-import kinmodel
+import pickle
 
+import kinmodel
+import phasespace.load_mocap as load_mocap
+from kinmodel.track_mocap import KinematicTreeTracker, KinematicTreeExternalFrameTracker, MocapFrameTracker
+from baxter_force_control.motion_costs import WeightedCostCombination, BasisManipulabilityCost, QuadraticDisplacementCost
+from baxter_force_control.steppables import MocapFrameEstimator, WeightedKinematicCostDescentEstimator, MocapSystemState, MocapMeasurement, \
+    Differentiator, Transformer, DynamicController, Selector, Averager
+from baxter_force_control.system import ForwardBlockNode, ForwardSystem, ForwardRoot
+
+from baxter_force_control.control_law import WeightedKinematicCostDescent, KinematicCostDescent
 
 FRAMERATE = 50
 GROUP_NAME = 'tree'
@@ -20,59 +22,63 @@ def main():
     parser.add_argument('kinmodel_json_optimized', help='The kinematic model JSON file')
     parser.add_argument('task_npz')
     parser.add_argument('block_diagram', help='The file name of the drawn block diagram of the system')
-    parser.add_argument('system_history', help='The system output npz file')
+    parser.add_argument('system_history', help='The system output pkl file')
     args = parser.parse_args()
 
+    # Perform weight estimation over different window sizes
     window_sizes = (10, 50, 100)
 
     # Load the calibration sequence
     data = np.load(args.task_npz)
     trials = 0
+
     # Stack all the trials
     while 'full_sequence_' + str(trials) in data.keys():
         trials += 1
     print('Number of trials: %d' % trials)
     mocap_data = [data['full_sequence_' + str(trial)] for trial in range(trials)]
-    mocap_data.append(np.concatenate(mocap_data, axis=2))
-    all_trials = {}
+    mocap_data.insert(0, np.concatenate(mocap_data, axis=2))
 
     # Initialize the tree
     kin_tree = kinmodel.KinematicTree(json_filename=args.kinmodel_json_optimized)
 
+    # We only want to draw the block diagram once
     block_diag = None
+    histories = {}
 
     for i, trial in enumerate(mocap_data):
-        if i == len(mocap_data)-1:
+        # If its the first element, it is the combined data, change i to ALL and set to plot the block diagram
+        if i == 0:
             i = 'ALL'
             block_diag = args.block_diagram
 
         print('Learning trial ' + str(i) + '...')
-        times, trajectories = learn(trial, kin_tree, window_sizes, block_diag)
+
+        # Learn the system and draw the block diagram
+        trajectories = learn(trial, kin_tree, window_sizes, block_diag)
+
+        # Set back to None so we don't re draw all the other times
         block_diag = None
 
-        append_keys(trajectories, '_' + str(i))
-        all_trials.update(trajectories)
-        all_trials['time_' + str(i)] = times
+        # append the trial number to the key to avoid clashing
+        histories[str(i)] = trajectories
 
-    all_trials['num_trials'] = len(mocap_data)
-
+    # save to an npz file
     filename = args.system_history
-
-    save(filename, all_trials)
-
-
-def append_keys(dictionary, suffix):
-    keys = dictionary.keys()
-    for key in keys:
-        dictionary[key+suffix] = dictionary.pop(key)
-
+    save(filename, histories)
 
 
 def save(filename, data):
     # store the trajectory of every element in the system
-    with open(filename, 'w') as output_file:
-        np.savez_compressed(output_file, **data)
-        print('System history saved to ' + filename)
+
+    output = open(filename, 'wb')
+
+    # Pickle dictionary using protocol 0.
+    pickle.dump(data, output)
+
+    # with open(filename, 'w') as output_file:
+    #     np.savez_compressed(output_file, **data)
+    print('System history saved to ' + filename)
 
 
 def learn(trial, kin_tree, window_sizes, diagram_filename=None):
@@ -108,11 +114,35 @@ def learn(trial, kin_tree, window_sizes, diagram_filename=None):
     manip_cost_z = BasisManipulabilityCost('manip_z', config_reference.keys(), get_flap1_jacobian, 'flap1_z')
 
     # Put these into a weighted cost and put the weighted cost into the system cost dictionary
-    weighted_cost = WeightedCostCombination('object_costs', [config_cost, manip_cost_x, manip_cost_y, manip_cost_z])
+    weighted_full = WeightedCostCombination('object_costs', [config_cost, manip_cost_x, manip_cost_y, manip_cost_z])
+    weighted_config_cost = WeightedCostCombination('config_cost', [config_cost])
+    weighted_manip_cost = WeightedCostCombination('manip_costs', [manip_cost_x, manip_cost_y, manip_cost_z])
+    costs = [weighted_full, weighted_config_cost, weighted_manip_cost]
+    types = ['Full']*len(window_sizes) + ['Config']*len(window_sizes) + ['Manip']*len(window_sizes)
 
-    # Define the control law we will estimate and an estimator
-    weighted_descent = WeightedKinematicCostDescent(1.0, weighted_cost, frame_tracker, 'flap1')
-    weighted_descent_estimators = [WeightedKinematicCostDescentEstimator(weighted_descent, window_size=i) for i in window_sizes]
+    # Define the control laws we will estimate
+    weighted_descents = [WeightedKinematicCostDescent(cost, frame_tracker, 'flap1') for cost in costs]
+
+    # And their respective estimators (the first len(window_size) elements are the full estimators)
+    weighted_descent_estimators = [WeightedKinematicCostDescentEstimator(weighted_descent, window_size=i)
+                                   for weighted_descent in weighted_descents for i in window_sizes]
+
+    # Define the control laws descending each cost separately to check orthogonality
+    config_descent = KinematicCostDescent(1.0, config_cost, frame_tracker, 'flap1', twist_control=True)
+    manip_descent = WeightedKinematicCostDescent(weighted_manip_cost, frame_tracker, 'flap1', twist_control=True)
+
+    # And their respective controllers
+    config_controllers = []
+    manip_controllers = []
+    config_selectors = []
+    input_averagers = []
+
+    for window_size in window_sizes:
+        config_controllers.append(DynamicController(config_descent.copy(), persistent_control=False))
+        manip_controllers.append(DynamicController(manip_descent, persistent_control=False))
+        # And a selector to extract the config weight as the descent rate
+        config_selectors.append(Selector({'config':'rate'}))
+        input_averagers.append(Averager(window_size))
 
     # Define the measurement block
     mocap_measurement = MocapMeasurement(mocap_array, 'mocap_measurement')
@@ -127,7 +157,7 @@ def learn(trial, kin_tree, window_sizes, diagram_filename=None):
     input_frame_tracker = MocapFrameTracker('input_tracker', flap_points)
     base_frame_tracker = MocapFrameTracker('base_tracker', base_points)
     input_frame_estimator = MocapFrameEstimator(input_frame_tracker, 'flap1')
-    input_estimator = Differentiator()
+    input_estimator = Differentiator(fixed_step=1.0/FRAMERATE)
     base_estimator = MocapFrameEstimator(base_frame_tracker, 'base')
     input_transformer = Transformer()
 
@@ -142,10 +172,36 @@ def learn(trial, kin_tree, window_sizes, diagram_filename=None):
     differentiator_node = ForwardBlockNode(input_estimator, 'Differentiator', 'd_base_input_flap')
     base_frame_node = ForwardBlockNode(base_estimator, 'Base Frame Estimator', 'base_transform')
     transformer_node = ForwardBlockNode(input_transformer, 'Base Frame Transformer', 'base_input_flap')
-    output_nodes = [ForwardBlockNode(weighted_descent_estimator,'Weighted Cost Descent Estimator (%d)'
-                                     % weighted_descent_estimator.get_window_size(),
-                                     'weights_%d' % weighted_descent_estimator.get_window_size())
-                    for weighted_descent_estimator in weighted_descent_estimators]
+    estimator_nodes = [ForwardBlockNode(weighted_descent_estimator,'%s Weighted Cost Descent Estimator (%d)'
+                                     % (typ, weighted_descent_estimator.get_window_size()),
+                                     '%s_weights_%d' % (typ.lower(), weighted_descent_estimator.get_window_size()))
+                    for weighted_descent_estimator, typ in zip(weighted_descent_estimators, types)]
+
+    controller_selector_nodes = []
+
+    for i, window_size in enumerate(window_sizes):
+        config_controller_node = ForwardBlockNode(config_controllers[i], 'Config Controller (%d)' % window_size,
+                                                  'input_config_controller_%d' % window_size)
+        manip_controller_node = ForwardBlockNode(manip_controllers[i], 'Manipulability Controller (%d)' % window_size,
+                                                 'input_manip_controller_%d' % window_size)
+
+        selector_node = ForwardBlockNode(config_selectors[i], 'Config Selector (%d)' % window_size, 'config_select_%d'
+                                         % window_size)
+
+        input_averager_node = ForwardBlockNode(input_averagers[i], 'Input Averager (%d)' % window_size,
+                                               'input_average_%d' % window_size)
+
+        estimator_nodes[i].add_output(selector_node, 'states')
+        selector_node.add_output(config_controller_node, 'parameters')
+        estimator_nodes[i].add_output(manip_controller_node, 'parameters')
+
+        system_state_node.add_output(config_controller_node, 'states')
+        system_state_node.add_output(manip_controller_node, 'states')
+
+        differentiator_node.add_output(input_averager_node, 'states')
+
+        controller_selector_nodes.append((config_controller_node, manip_controller_node, selector_node,
+                                          input_averager_node))
 
     measurement_node.add_output(input_frame_node, 'measurement')
     measurement_node.add_output(system_state_node, 'measurement')
@@ -153,32 +209,26 @@ def learn(trial, kin_tree, window_sizes, diagram_filename=None):
     input_frame_node.add_output(transformer_node, 'primitives')
     base_frame_node.add_output(transformer_node, 'transform')
     transformer_node.add_output(differentiator_node, 'states')
-    for output_node in output_nodes:
-        differentiator_node.add_output(output_node, 'inputs')
-        system_state_node.add_output(output_node, 'states')
 
+    for estimator_node in estimator_nodes:
+        differentiator_node.add_output(estimator_node, 'inputs')
+        system_state_node.add_output(estimator_node, 'states')
+
+    # Define the root (all source nodes)
     root = ForwardRoot([measurement_node])
 
+    # Create the system
     system = ForwardSystem(root)
 
+    # Draw the block diagram if requested
     if diagram_filename is not None:
         system.draw(filename=diagram_filename)
 
     # all the data for every timestep
-    all_times, all_data = zip(*system.run(record=True, print_steps=50))
-    # convert list of dicts to a dict of lists
-    trajectories = {element: [] for element in all_data[-1]}
-    for time_slice in all_data:
-        for element in trajectories:
-            trajectories[element].append(time_slice[element])
+    all_data = system.run(record=True, print_steps=50)
 
-    # convert dict of lists to dict of numpy arrays
-    for element in trajectories:
-        trajectories[element] = np.array(trajectories[element])
-
-    return all_times, trajectories
+    return all_data
 
 
 if __name__ == '__main__':
-    # cProfile.run('main()', 'fit_kinmodel.profile')
     main()

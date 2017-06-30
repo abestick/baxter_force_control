@@ -2,6 +2,7 @@
 from abc import ABCMeta, abstractmethod
 from motion_costs import StateCost, WeightedCostCombination
 from kinmodel.track_mocap import FrameTracker
+from kinmodel import Twist
 from copy import deepcopy
 
 
@@ -21,6 +22,10 @@ class ControlLaw(object):
         :return: an identical ControlLaw object
         """
         return deepcopy(self)
+
+    @abstractmethod
+    def set_parameters(self, **kwargs):
+        pass
 
 
 class LearnableControlLaw(ControlLaw):
@@ -47,15 +52,19 @@ class CostDescent(ControlLaw):
         self.cost_function = cost_function
         self.inverse_dynamics = inverse_dynamics
 
-    def compute_control(self, states):
+    def compute_control(self, states, rate=None):
         """
         Computes the control to apply to descend the cost
         :param states: the current states
+        :param rate: optional update of the controller rate
         :return: a dict of controls
         """
 
+        if rate is not None:
+            self.rate = rate
+
         # This is a (1, X) Jacobian
-        partial_cost_states = self.cost_function.jacobian(states)
+        partial_cost_states = self.cost_function.gradient(states)
 
         # This is a dict of states which gives the direction of maximal cost descent
         # NOTE: Jacobian facilitates right multiplication with a dictionary.
@@ -64,6 +73,12 @@ class CostDescent(ControlLaw):
 
         return self.inverse_dynamics(states, descending_dynamics)
 
+    def get_parameters(self):
+        return {'rate': self.rate}
+
+    def set_parameters(self, rate_dict):
+        self.rate = rate_dict['rate']
+
 
 class KinematicCostDescent(CostDescent):
     """
@@ -71,7 +86,7 @@ class KinematicCostDescent(CostDescent):
     are the joint angles of this kinematic tree.
     """
 
-    def __init__(self, rate, cost_function, frame_tracker, input_frame_name):
+    def __init__(self, rate, cost_function, frame_tracker, input_frame_name, twist_control=False):
         """
         Constructor
         :param float rate: the rate at which to descend the cost, should be positive for descent, negative for ascent
@@ -85,12 +100,16 @@ class KinematicCostDescent(CostDescent):
 
         self.frame_tracker = frame_tracker
         self.input_frame_name = input_frame_name
+        self.twist_control = twist_control
 
         super(KinematicCostDescent, self).__init__(rate, cost_function, self.inverse_dynamics)
 
     def inverse_dynamics(self, states, state_derivatives):
         """Returns the pose velocity of of the input frame for a particular state and state derivative"""
-        return self.inputs_states_jacobian(states) * state_derivatives
+        if self.twist_control:
+            return {self.input_frame_name: Twist.from_dict(self.inputs_states_jacobian(states) * state_derivatives)}
+        else:
+            return self.inputs_states_jacobian(states) * state_derivatives
 
     def inputs_states_jacobian(self, states):
         """Returns the jacobian of the input frame"""
@@ -102,10 +121,9 @@ class WeightedKinematicCostDescent(KinematicCostDescent, LearnableControlLaw):
     A special case of KinematicCostDescent whereby the cost is a linear combination of base costs. The coefficients of
     these base costs can thus be learnt.
     """
-    def __init__(self, rate, cost_function, frame_tracker, input_frame_name):
+    def __init__(self, cost_function, frame_tracker, input_frame_name, twist_control=False):
         """
         Constructor
-        :param float rate: the rate at which to descend the cost, should be positive for descent, negative for ascent
         :param WeightedCostCombination cost_function: the weighted cost function which is to be descended
         :param frame_tracker: the FrameTracker which will track the input frame
         :param input_frame_name: the frame whose pose velocity is the input to the system
@@ -114,12 +132,14 @@ class WeightedKinematicCostDescent(KinematicCostDescent, LearnableControlLaw):
         assert isinstance(cost_function, WeightedCostCombination), \
             'cost_function must be a WeightedCostCombination object.'
 
-        super(WeightedKinematicCostDescent, self).__init__(rate, cost_function, frame_tracker, input_frame_name)
+        super(WeightedKinematicCostDescent, self).__init__(1.0, cost_function, frame_tracker, input_frame_name,
+                                                           twist_control)
 
     def step_bases(self, states):
         """
         Provides the bases of inputs for each individual cost when unweighted
         :param states: a dict of the current states
+        :param weights: optional dict for dynamic weighting
         :return: a Jacobian object whose columns are the inputs for each individual base cost
         """
 
@@ -136,12 +156,16 @@ class WeightedKinematicCostDescent(KinematicCostDescent, LearnableControlLaw):
         # u = B(x).pinv * dx_star = J(x) * (w1*dx1_star + w2*dx2_star + ... + wN*dxN_star) = J(x) * Jc_vec(x).T * w
         return partial_input_states * partial_cost_vector_states.T()
 
-    def get_weights(self):
+    def get_parameters(self):
         """Returns the current weightings"""
         return self.cost_function.get_weights()
 
-    def set_weights(self, weights):
+    def set_parameters(self, weights):
         """Sets the current weights"""
         self.cost_function.set_weights(weights)
+
+    def scale(self, scale):
+        """Scales the weights uniformly"""
+        self.cost_function.scale(scale)
 
 
