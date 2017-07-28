@@ -3,9 +3,18 @@ from abc import ABCMeta, abstractmethod
 from inspect import getargspec
 import time
 import numpy as np
+import rospy
+import tf
+from sensor_msgs.msg import JointState, PointCloud
+from geometry_msgs.msg import PoseStamped, Pose, Point, Quaternion, TwistStamped, Twist, Vector3, Point32
+from tf2_msgs.msg import TFMessage
+from std_msgs.msg import Header
+from scipy.optimize import nnls
 from control_law import LearnableControlLaw, ControlLaw, WeightedKinematicCostDescent
 from collections import deque
-from kinmodel import new_geometric_primitive, GeometricPrimitive
+from motion_costs import StateCost
+import kinmodel
+from scipy.linalg import block_diag
 
 
 class Steppable(object):
@@ -22,6 +31,121 @@ class Steppable(object):
         :return: a list of strings which are the names of the inputs to the step function
         """
         return getargspec(self.step)[0][1:]
+
+
+class EdgePublisher(Steppable):
+
+    def __init__(self, topic_name, message_type, constructor, bag=None, get_time=None):
+        self.pub = rospy.Publisher(topic_name, message_type, queue_size=100)
+        self.constructor = constructor
+        self.bag = bag
+        self.get_time = lambda: rospy.Time(get_time()) if get_time is not None else lambda: None
+
+    def step(self, states):
+        if len(states) > 0:
+            msg = self.constructor(states)
+            self.pub.publish(msg)
+
+            if self.bag is not None:
+                self.bag.write(self.pub.name, msg, t=self.get_time())
+
+
+class JointPublisher(EdgePublisher):
+
+    def __init__(self, topic_name, bag=None, get_time=None):
+        super(JointPublisher, self).__init__(topic_name, JointState, self.dict_to_joint_state, bag, get_time)
+
+    def dict_to_joint_state(self, states):
+        names, position = zip(*states.items())
+        return JointState(header=Header(stamp=rospy.Time.now()), name=names, position=position)
+
+
+class PosePublisher(EdgePublisher):
+
+    def __init__(self, topic_name, reference_frame, bag=None, get_time=None):
+        self.reference_frame = reference_frame
+        super(PosePublisher, self).__init__(topic_name, PoseStamped, self.transform_to_pose_msg, bag, get_time)
+
+    def transform_to_pose_msg(self, transform):
+        (_, transform), = transform.items()
+        pose = transform.pose(convention='quaternion')
+        header = Header(stamp=rospy.Time.now(), frame_id=self.reference_frame)
+        return PoseStamped(header=header, pose=Pose(position=Point(*pose[:3]), orientation=Quaternion(*pose[3:])))
+
+
+class TwistPublisher(EdgePublisher):
+
+    def __init__(self, topic_name, reference_frame, bag=None, get_time=None):
+        self.reference_frame = reference_frame
+        super(TwistPublisher, self).__init__(topic_name, TwistStamped, self.twist_to_twist_msg, bag, get_time)
+
+    def twist_to_twist_msg(self, twist):
+        (_, twist), = twist.items()
+        header = Header(stamp=rospy.Time.now(), frame_id=self.reference_frame)
+        return TwistStamped(header=header, twist=Twist(linear=Vector3(*twist.nu()), angular=Vector3(*twist.omega())))
+
+
+class PointCloudPublisher(EdgePublisher):
+
+    def __init__(self, topic_name, reference_frame, bag=None, get_time=None):
+        self.reference_frame = reference_frame
+        super(PointCloudPublisher, self).__init__(topic_name, PointCloud, self.array_to_point_cloud, bag, get_time)
+
+    def array_to_point_cloud(self, array_dict):
+        (_, array), = array_dict.items()
+        header = Header(stamp=rospy.Time.now(), frame_id=self.reference_frame)
+        return PointCloud(header=header, points=[Point32(*row) for row in array])
+
+
+class TFPublisher(Steppable):
+
+    def __init__(self, parent_frame, child_frame):
+        self.br = tf.TransformBroadcaster()
+        self.parent_frame = parent_frame
+        self.child_frame = child_frame
+
+    def step(self, transform):
+        (_, transform), = transform.items()
+        transform = transform.inv()
+        self.br.sendTransform(transform.p(),
+                         tf.transformations.quaternion_from_matrix(transform.R(homog=True)),
+                         rospy.Time.now(),
+                         self.child_frame,
+                         self.parent_frame)
+
+
+class TopicBagger(Steppable):
+
+    step = None
+
+    def __init__(self, topic_name, message_type, bag, get_time=None, dummy_arg=False):
+        self.sub = rospy.Subscriber(topic_name, message_type, self._update)
+        self.msg = None
+        self.bag = bag
+        self.get_time = lambda: rospy.Time(get_time()) if get_time is not None else lambda: None
+        self.step = self._step_dummy if dummy_arg else self._step_empty()
+
+    def _update(self, msg):
+        self.msg = msg
+
+    def _step_dummy(self, dummy):
+        self._step_empty()
+
+    def _step_empty(self):
+        if self.msg is not None:
+            self.bag.write(self.sub.name, self.msg, t=self.get_time())
+
+
+class TFBagger(TopicBagger):
+
+    def __init__(self, bag, get_time=None, dummy_arg=False):
+        super(TFBagger, self).__init__('tf', TFMessage, bag, get_time, dummy_arg)
+        self.transforms = {}
+
+    def _update(self, msg):
+        self.transforms.update({'%s.%s' % (t.header.frame_id, t.child_frame_id): t for t in msg.transforms})
+        self.msg = msg
+        self.msg.transforms = self.transforms.values()
 
 
 class Constant(Steppable):
@@ -204,7 +328,10 @@ class MocapFrameEstimator(Estimator):
 
         # extract the frame and return the transform estimate
         (_, frame), = measurement.items()
-        return {self._frame_name: self._mocap_frame_tracker.process_frame(frame)}
+
+        transform = self._mocap_frame_tracker.process_frame(frame)
+
+        return {self._frame_name: transform if transform is not None else kinmodel.Transform(homog_array=np.identity(4))}
 
 
 class Transformer(Steppable):
@@ -260,6 +387,16 @@ class MocapSystemState(SystemState, Estimator):
             self._states.update(mocap_tracker.process_frame(frame))
 
 
+class CostCalculator(Steppable):
+
+    def __init__(self, state_cost):
+        self.state_cost = state_cost
+        assert isinstance(self.state_cost, StateCost), 'state_cost must be a StateCost object.'
+
+    def step(self, states):
+        return {self.state_cost.name: self.state_cost.cost(states)}
+
+
 class Controller(Steppable):
     """
     A Steppable which implements a control law on the current states
@@ -273,7 +410,7 @@ class Controller(Steppable):
         assert isinstance(control_law, ControlLaw), 'control_law must be a ControlLaw object'
 
         if output_type is not None:
-            assert isinstance(output_type, GeometricPrimitive)
+            assert isinstance(output_type, kinmodel.GeometricPrimitive)
 
         self.output_type = output_type
 
@@ -326,7 +463,7 @@ class WeightedKinematicCostDescentEstimator(ControllerEstimator):
     A ControllerEstimator for the WeightedKinematicCostDescent ControlLaw. Estimates the weight vector
     """
 
-    def __init__(self, control_law, window_size=None):
+    def __init__(self, control_law, reference_frame, window_size=None, non_negative=False):
         """
         Constructor
         :param WeightedKinematicCostDescent control_law: the WeightedKinematicCostDescent ControlLaw to be learnt
@@ -344,22 +481,38 @@ class WeightedKinematicCostDescentEstimator(ControllerEstimator):
         self.data_buffer = deque(maxlen=window_size)
         self.buffers = []
 
-    def step(self, states, inputs):
+        self.least_squares = nnls if non_negative else np.linalg.lstsq
+        self.reference_frame = reference_frame
+
+    def step(self, states, input_twist, base_twist, base_transform):
         """
         Steps through one iteration
         :param states: the current states
-        :param inputs: the current input
+        :param input_twist: the current input
+        :param base_twist: the pose velocity of the object base frame
         :return: the estimated weights
         """
-        # This is a (U, C) Jacobian object
-        input_bases = self.control_law.step_bases(states).reorder(column_names=self.weight_names)
+
+        (input_name, input_twist), = input_twist.items()
+        (base_name, base_twist), = base_twist.items()
+        (_, base_transform), = base_transform.items()
+        base_rot = base_transform.R(homog=False)
+        base_rot_six_d = block_diag(base_rot, base_rot)
+
+        # This is a (U, C) Jacobian object showing the twist of max increase for each basis expressed in the base frame
+        input_bases = self.control_law.step_bases(states).reorder(row_names=input_twist.names(prefix=input_name+'_'),
+                                                                  column_names=self.weight_names)
+
+        # We want to express each twist in the reference_frame, so we take the relative twist
+        input_bases.in_place_dot(base_rot_six_d, left=True)
+        input_bases -= base_twist.xi().reshape((-1, 1))
 
         # Vectorize the inputs so that they match the rows of input_bases
-        self.data_buffer.append((input_bases.vectorize(inputs, rows=True), input_bases.J()))
+        self.data_buffer.append((input_twist.xi(), input_bases.J()))
 
         # append any registered buffers with the data
         for i in range(len(self.buffers)):
-            self.buffers[i].append(inputs, input_bases)
+            self.buffers[i].append(input_twist, input_bases)
 
         # if we have enough data to regress over our window size, perform the regression and return the weights
         if len(self.data_buffer) == self.window_size:
@@ -377,10 +530,13 @@ class WeightedKinematicCostDescentEstimator(ControllerEstimator):
         :return: a dictionary of the weights of the WeightedCost
         """
         input_arrays, input_bases_arrays = zip(*self.data_buffer)
-        targets = np.concatenate(input_arrays)
+        targets = np.concatenate(input_arrays).squeeze()
         features = -np.concatenate(input_bases_arrays, axis=0)
-
-        return {weight_name: val for weight_name, val in zip(self.weight_names, np.linalg.lstsq(features, targets)[0])}
+        fit = self.least_squares(features, targets)
+        result = {weight_name: val for weight_name, val in zip(self.weight_names, fit[0])}
+        n, k = features.shape
+        result['adjusted_r_squared'] = 1 - (1 - fit[1] / np.sum((targets-targets.mean()) ** 2)) * (n - 1) / (n - k - 1)
+        return result
 
     def register_buffer(self, buffer):
         """

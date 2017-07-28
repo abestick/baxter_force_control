@@ -5,7 +5,7 @@ from catkin_pkg.python_setup import generate_distutils_setup
 
 # fetch values from package.xml
 setup_args = generate_distutils_setup(
-    packages=['baxter_force_control'],
+    packages=['baxter_force_control', 'baxter_tools'],
     package_dir={'': 'src'})
 
 setup(**setup_args)

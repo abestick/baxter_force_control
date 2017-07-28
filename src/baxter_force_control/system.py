@@ -4,6 +4,7 @@ from abc import ABCMeta, abstractmethod
 from graphviz import Digraph
 import time
 import pandas as pd
+import rospy
 from steppables import Steppable
 
 
@@ -135,11 +136,14 @@ class ForwardBlockNode(BlockNode):
         local_output = self._steppable.step(**self._inputs)
         self._inputs = {}
 
-        if save_dict is not None:
+        if save_dict is not None and not self.is_sink():
             save_dict[self._output_name] = local_output
 
         if self.is_output():
-            return {self._output_name: local_output}
+            if self.is_sink():
+                return {}
+            else:
+                return {self._output_name: local_output}
 
         else:
             output = {}
@@ -169,6 +173,9 @@ class ForwardBlockNode(BlockNode):
 
     def is_output(self):
         return len(self._output_nodes) == 0
+
+    def is_sink(self):
+        return self._output_name is None
 
     def get_output_nodes(self):
         return self._output_nodes
@@ -304,7 +311,7 @@ class System(object):
     """
     __metaclass__ = ABCMeta
 
-    def __init__(self, root_node, output_function=None):
+    def __init__(self, root_node, framerate=None):
         """
         Constructor
         :param root_node: the last node in the system pipeline
@@ -313,10 +320,19 @@ class System(object):
         assert root_node.is_connected(), 'root_node is not fully connected'
 
         self.root_node = root_node
-        self.output_function = output_function
         self.history = pd.DataFrame()
+        self.steps = 0
         self._all_edges = {}
         self.start_time = 0
+        self.framerate = framerate
+        self.get_time = self._get_real_time if framerate is None else self._get_sim_time
+        self.pubs = {}
+
+    def _get_sim_time(self):
+        return 1.0* self.steps / self.framerate
+
+    def _get_real_time(self):
+        return time.time() - self.start_time
 
     def step(self, record):
         """
@@ -327,12 +343,9 @@ class System(object):
         edges = {}
         output = self.root_node.step(edges)
         if record:
-            edges['time'] = {'time':time.time()-self.start_time}
+            edges['time'] = {'time': self.get_time()}
             self._all_edges.update(edges)
             self.history = self.history.append([{'%s_%s'%(g, k):v for g, d in edges.items() for k,v in d.items()}], ignore_index=True)
-
-        if self.output_function is not None:
-            self.output_function(output)
 
     def clear(self):
         """Clears the history"""
@@ -345,15 +358,41 @@ class System(object):
         :param record: If true, the system edges will be saved each step
         :return: a list of the system edges for each timestep
         """
+
         self.start_time = time.time()
+        self.steps = 0
         while True:
             try:
                 self.step(record)
-                if print_steps >= 0 and len(self.history) % print_steps == 0:
-                    print(len(self.history))
+                if print_steps >= 0 and self.steps % print_steps == 0:
+                    print(self.steps)
+                self.steps += 1
 
             except (EOFError, KeyboardInterrupt):
                 break
+
+        groups = {group: self._all_edges[group].keys() for group in self._all_edges}
+        return self.history, self.history.groupby(groups)
+
+    def dynamic_publish(self, topic, message_type, message, parser):
+        publisher = self.pubs.get(topic, rospy.Publisher(topic, message_type, queue_size=100))
+        publisher.publish(message_type(parser(message)))
+
+    def run_timed(self, rate, record=True, print_steps=-1):
+        rate = rospy.Rate(rate)
+        self.start_time = time.time()
+
+        while True:
+            try:
+                self.step(record)
+                if print_steps >= 0 and self.steps % print_steps == 0:
+                    print(self.steps)
+                self.steps += 1
+
+            except (EOFError, KeyboardInterrupt):
+                break
+
+            rate.sleep()
 
         groups = {group: self._all_edges[group].keys() for group in self._all_edges}
         return self.history, self.history.groupby(groups)
@@ -386,8 +425,9 @@ class ForwardSystem(System):
             dot.edge(block_node.get_name(), output_node.get_name(), label=block_node.get_output_name())
 
             if output_node.is_output():
-                dot.node(output_node.get_output_name(), shape='none')
-                dot.edge(output_node.get_name(), output_node.get_output_name())
+                if not output_node.is_sink():
+                    dot.node(output_node.get_output_name(), shape='none')
+                    dot.edge(output_node.get_name(), output_node.get_output_name())
 
             else:
                 self._draw_outputs(dot, output_node)

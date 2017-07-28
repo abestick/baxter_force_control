@@ -1,12 +1,12 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="cardboard">
 
-    <xacro:property name="length" value=".60" />
+    <xacro:property name="length" value="0.8" />
     <xacro:property name="width" value=".30" />
     <xacro:property name="thickness" value=".005" />
     <xacro:property name="joints" value="4" />
 
-    <link name="base_link">
+    <link name="input_flap">
     <visual>
         <geometry>
             <box size="${length/(joints+1)} ${width} ${thickness}"/>
@@ -15,71 +15,6 @@
     </visual>
     </link>
 
-    <!-- Hacky way to implement a "for" loop for between 0 and 5 joints -->
-    <xacro:if value="${joints>0}">
-
-        <link name="link_1">
-            <visual>
-                <geometry>
-                    <box size="${length/(joints+1)} ${width} ${thickness}"/>
-                </geometry>
-                <origin rpy="0 0 0" xyz="${0.5*length/(joints+1)} 0 0"/>
-            </visual>
-        </link>
-
-        <joint name="joint_1" type="revolute">
-            <axis xyz="0 1 0"/>
-            <limit effort="1000.0" lower="-2.96705973" upper="2.96705973" velocity="0.5"/>
-            <origin rpy="0 0 0" xyz="${length/(joints+1)} 0.0 0"/>
-            <parent link="base_link"/>
-            <child link="link_1"/>
-        </joint>
-
-    </xacro:if>
-
-    <xacro:if value="${joints>1}">
-
-        <link name="link_2">
-            <visual>
-                <geometry>
-                    <box size="${length/(joints+1)} ${width} ${thickness}"/>
-                </geometry>
-                <origin rpy="0 0 0" xyz="${0.5*length/(joints+1)} 0 0"/>
-            </visual>
-        </link>
-
-        <joint name="joint_2" type="revolute">
-            <axis xyz="0 1 0"/>
-            <limit effort="1000.0" lower="-2.96705973" upper="2.96705973" velocity="0.5"/>
-            <origin rpy="0 0 0" xyz="${length/(joints+1)} 0.0 0"/>
-            <parent link="link_1"/>
-            <child link="link_2"/>
-        </joint>
-
-    </xacro:if>
-
-    <xacro:if value="${joints>2}">
-
-        <link name="link_3">
-            <visual>
-                <geometry>
-                    <box size="${length/(joints+1)} ${width} ${thickness}"/>
-                </geometry>
-                <origin rpy="0 0 0" xyz="${0.5*length/(joints+1)} 0 0"/>
-            </visual>
-        </link>
-
-        <joint name="joint_3" type="revolute">
-            <axis xyz="0 1 0"/>
-            <limit effort="1000.0" lower="-2.96705973" upper="2.96705973" velocity="0.5"/>
-            <origin rpy="0 0 0" xyz="${length/(joints+1)} 0.0 0"/>
-            <parent link="link_2"/>
-            <child link="link_3"/>
-        </joint>
-
-    </xacro:if>
-
-    <xacro:if value="${joints>3}">
 
         <link name="link_4">
             <visual>
@@ -90,17 +25,48 @@
             </visual>
         </link>
 
-        <joint name="joint_4" type="revolute">
-            <axis xyz="0 1 0"/>
+        <joint name="joint4" type="revolute">
+            <axis xyz="0 -1 0"/>
             <limit effort="1000.0" lower="-2.96705973" upper="2.96705973" velocity="0.5"/>
             <origin rpy="0 0 0" xyz="${length/(joints+1)} 0.0 0"/>
-            <parent link="link_3"/>
+            <parent link="input_flap"/>
             <child link="link_4"/>
         </joint>
 
-    </xacro:if>
+        <link name="link_2">
+            <visual>
+                <geometry>
+                    <box size="${length/(joints+1)} ${width} ${thickness}"/>
+                </geometry>
+                <origin rpy="0 0 0" xyz="${0.5*length/(joints+1)} 0 0"/>
+            </visual>
+        </link>
 
-    <xacro:if value="${joints>4}">
+        <joint name="joint2" type="revolute">
+            <axis xyz="0 -1 0"/>
+            <limit effort="1000.0" lower="-2.96705973" upper="2.96705973" velocity="0.5"/>
+            <origin rpy="0 0 0" xyz="${length/(joints+1)} 0.0 0"/>
+            <parent link="link_4"/>
+            <child link="link_2"/>
+        </joint>
+
+        <link name="link_3">
+            <visual>
+                <geometry>
+                    <box size="${length/(joints+1)} ${width} ${thickness}"/>
+                </geometry>
+                <origin rpy="0 0 0" xyz="${0.5*length/(joints+1)} 0 0"/>
+            </visual>
+        </link>
+
+        <joint name="joint3" type="revolute">
+            <axis xyz="0 -1 0"/>
+            <limit effort="1000.0" lower="-2.96705973" upper="2.96705973" velocity="0.5"/>
+            <origin rpy="0 0 0" xyz="${length/(joints+1)} 0.0 0"/>
+            <parent link="link_2"/>
+            <child link="link_3"/>
+        </joint>
+    
 
         <link name="link_5">
             <visual>
@@ -111,15 +77,12 @@
             </visual>
         </link>
 
-        <joint name="joint_5" type="revolute">
-            <axis xyz="0 1 0"/>
+        <joint name="joint5" type="revolute">
+            <axis xyz="0 -1 0"/>
             <limit effort="1000.0" lower="-2.96705973" upper="2.96705973" velocity="0.5"/>
             <origin rpy="0 0 0" xyz="${length/(joints+1)} 0.0 0"/>
-            <parent link="link_4"/>
+            <parent link="link_3"/>
             <child link="link_5"/>
         </joint>
-
-    </xacro:if>
-
 
 </robot>

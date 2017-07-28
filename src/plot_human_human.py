@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import pickle
 from geometry_msgs.msg import PoseStamped, Point, Quaternion, Pose
 from std_msgs.msg import Header
-from pandas_tools import *
+from baxter_force_control.pandas_tools import *
 
 
 def main():
@@ -33,7 +33,7 @@ def main():
         plotting_data.plot()
         plt.show()
 
-        choice = raw_input('Quit = q, New plot = n, Subset plot = s, Orthoganal test = o')
+        choice = raw_input('Quit = q, New plot = n, Subset plot = s, Orthoganal test = o\n')
 
         while choice == 's' or choice == 'o':
 

@@ -86,7 +86,7 @@ class KinematicCostDescent(CostDescent):
     are the joint angles of this kinematic tree.
     """
 
-    def __init__(self, rate, cost_function, frame_tracker, input_frame_name, twist_control=False):
+    def __init__(self, rate, cost_function, frame_tracker, input_frame_name, base_frame_name, twist_control=False):
         """
         Constructor
         :param float rate: the rate at which to descend the cost, should be positive for descent, negative for ascent
@@ -100,6 +100,7 @@ class KinematicCostDescent(CostDescent):
 
         self.frame_tracker = frame_tracker
         self.input_frame_name = input_frame_name
+        self.base_frame_name = base_frame_name
         self.twist_control = twist_control
 
         super(KinematicCostDescent, self).__init__(rate, cost_function, self.inverse_dynamics)
@@ -113,7 +114,7 @@ class KinematicCostDescent(CostDescent):
 
     def inputs_states_jacobian(self, states):
         """Returns the jacobian of the input frame"""
-        return self.frame_tracker.compute_jacobian('root', self.input_frame_name, states)
+        return self.frame_tracker.compute_jacobian(self.base_frame_name, self.input_frame_name, states)
 
 
 class WeightedKinematicCostDescent(KinematicCostDescent, LearnableControlLaw):
@@ -121,7 +122,7 @@ class WeightedKinematicCostDescent(KinematicCostDescent, LearnableControlLaw):
     A special case of KinematicCostDescent whereby the cost is a linear combination of base costs. The coefficients of
     these base costs can thus be learnt.
     """
-    def __init__(self, cost_function, frame_tracker, input_frame_name, twist_control=False):
+    def __init__(self, cost_function, frame_tracker, input_frame_name, base_frame_name, twist_control=False):
         """
         Constructor
         :param WeightedCostCombination cost_function: the weighted cost function which is to be descended
@@ -133,7 +134,7 @@ class WeightedKinematicCostDescent(KinematicCostDescent, LearnableControlLaw):
             'cost_function must be a WeightedCostCombination object.'
 
         super(WeightedKinematicCostDescent, self).__init__(1.0, cost_function, frame_tracker, input_frame_name,
-                                                           twist_control)
+                                                           base_frame_name, twist_control)
 
     def step_bases(self, states):
         """

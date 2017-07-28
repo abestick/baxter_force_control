@@ -268,4 +268,4 @@ def main2():
     rospy.spin()
 
 if __name__ == "__main__":
-    main2()
+    main1()

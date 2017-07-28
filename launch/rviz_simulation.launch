@@ -6,12 +6,14 @@
      your robot for it to function properly again -->
 
 <launch>
+  <arg name="joint_state_pub" default="0" />
+
   <!-- send robot XML to param server -->
   <param name="robot_description" command="$(find xacro)/xacro --inorder $(find
                                            baxter_description)/urdf/baxter.urdf.xacro"/>
 
   <!-- open joint_state_pub in case we want joint_position_control -->
-  <node name="joint_state_publisher" pkg="joint_state_publisher" type="joint_state_publisher">
+  <node name="joint_state_publisher" pkg="joint_state_publisher" type="joint_state_publisher" if="$(arg joint_state_pub)">
     <param name="use_gui" value="TRUE"/>
     <remap from="joint_states" to="joint_vel_sim/joint_states/pos" />
   </node>
