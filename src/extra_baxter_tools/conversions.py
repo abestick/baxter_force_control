@@ -1,8 +1,10 @@
 import numpy as np
+import rospy
 from geometry_msgs.msg import Pose, Transform, PoseStamped, TransformStamped, Point, Vector3, PointStamped, \
     Vector3Stamped, Quaternion
 from trajectory_msgs.msg import JointTrajectory, MultiDOFJointTrajectory, \
     JointTrajectoryPoint, MultiDOFJointTrajectoryPoint
+from definitions import BaxterDefs as bd
 
 
 def cartesian_to_array(msg):
@@ -105,7 +107,18 @@ def trajectory_to_arrays(msg):
     return np.array(points), np.array(time)
 
 
-def arrays_to_joint_trajectory_msg(positions, time):
-    msg = JointTrajectory()
+def arrays_to_joint_trajectory_msg(positions, time, names=None):
+    if names is None:
+        names = bd.arm.joint_names
+
+    msg = JointTrajectory(joint_names=names)
     for pos, t in zip(positions, time):
-        msg.points.append(JointTrajectoryPoint(positions=pos, time_from_start=t))
+        msg.points.append(JointTrajectoryPoint(positions=pos, time_from_start=rospy.Duration(t)))
+    return msg
+
+
+def arrays_to_multi_dof_trajectory_msg(poses, time):
+    msg = MultiDOFJointTrajectory()
+    for pose, t in zip(poses, time):
+        msg.points.append(MultiDOFJointTrajectoryPoint(transforms=[array_to_transform_msg(pose)], time_from_start=rospy.Duration(t)))
+    return msg

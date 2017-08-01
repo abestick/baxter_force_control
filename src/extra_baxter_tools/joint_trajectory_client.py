@@ -52,6 +52,15 @@ import baxter_interface
 from baxter_interface import CHECK_VERSION
 from definitions import BaxterDefs as bd
 from motion import saturate_trajectory_pos, saturate_trajectory_vel
+from kinematics import ExtendedBaxterKinematics
+
+
+def send_multi_dof_trajectory(trajectory, limb):
+    bjt = BaxterJointTrajectory(limb)
+    ebk = ExtendedBaxterKinematics(limb)
+    bjt.set_trajectory(ebk.invert_trajectory_msg(trajectory)[0])
+    bjt.start()
+    del(bjt, ebk)
 
 
 class BaxterJointTrajectory(object):
@@ -72,6 +81,7 @@ class BaxterJointTrajectory(object):
             rospy.signal_shutdown("Timed out waiting for Action Server")
             sys.exit(1)
         self.clear(limb)
+        self._limb = baxter_interface.Limb(limb)
 
     def add_point(self, positions, time):
         point = JointTrajectoryPoint()
@@ -79,14 +89,29 @@ class BaxterJointTrajectory(object):
         point.time_from_start = rospy.Duration(time)
         self._goal.trajectory.points.append(point)
 
+    def set_trajectory(self, trajectory):
+        self._goal.trajectory = trajectory
+
     def start(self):
+        self.prepend_current()
         self._goal.trajectory.header.stamp = rospy.Time.now()
         self._client.send_goal(self._goal)
+
+    def prepend_current(self):
+        # If there is only one point then the server will do this for us
+        if len(self._goal.trajectory.points) != 1:
+            # Add current position as trajectory point
+            first_trajectory_point = JointTrajectoryPoint()
+            first_trajectory_point.positions = self._get_current_position(self._goal.trajectory.joint_names)
+            first_trajectory_point.time_from_start = rospy.Duration(0)
+            self._goal.trajectory.points.insert(0, first_trajectory_point)
 
     def stop(self):
         self._client.cancel_goal()
 
-    def wait(self, timeout=15.0):
+    def wait(self, timeout=None):
+        if timeout == None:
+            timeout = self._goal.trajectory.points[-1].time_from_start.to_sec() + 5.0
         self._client.wait_for_result(timeout=rospy.Duration(timeout))
 
     def result(self):
@@ -101,6 +126,9 @@ class BaxterJointTrajectory(object):
     def saturate_trajectory(self, uniform_pos=False, uniform_vel=False):
         self._goal.trajectory = saturate_trajectory_pos(self._goal.trajectory, uniform_pos)
         self._goal.trajectory = saturate_trajectory_vel(self._goal.trajectory, uniform_vel)
+
+    def _get_current_position(self, joint_names):
+        return [self._limb.joint_angle(joint) for joint in joint_names]
 
 
 def main():

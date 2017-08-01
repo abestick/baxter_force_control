@@ -27,13 +27,13 @@ class ExtendedBaxterKinematics(baxter_kinematics):
 
     def inverse_from_msg(self, msg):
         position, orientation = spatial_to_arrays(msg)
-        return self.inverse(list(position), list(orientation))
+        return self.inverse_kinematics(list(position), list(orientation))
 
     def soft_inverse(self, pose, known_feasible, delta=0.01, iterations=100):
         position, orientation = np.split(pose, [3])
         if len(orientation) == 0:
             orientation = None
-        joints = self.inverse(position, orientation)
+        joints = self.inverse_kinematics(list(position), list(orientation))
 
         if joints is not None:
             return joints, pose
@@ -58,31 +58,37 @@ class ExtendedBaxterKinematics(baxter_kinematics):
 
         return self.soft_inverse(pose, known_feasible, delta, iterations)
 
-    def invert_trajectory_msg(self, trajectory, known_feasible, delta=0.01, iterations=100):
+    def invert_trajectory_msg(self, trajectory, delta=0.01, iterations=100):
         """
 
         :param MultiDOFJointTrajectory trajectory:
         :return:
         """
-        joint_trajectory_msg = JointTrajectory(header=trajectory.header)
+        joint_trajectory_msg = JointTrajectory(header=trajectory.header, joint_names=self._joint_names)
         pose_trajectory_msg = MultiDOFJointTrajectory(header=trajectory.header)
-        points = [point for point in trajectory.points]
+        
 
         deviation = np.zeros(7)
         deviation[-1] = 1
+        known_feasible = trajectory.points[0].transforms[0]
 
-        for point in points:
+        for point in trajectory.points:
             pose = point.transforms[0]
             joints, real_pose = self.soft_inverse_from_msg(pose, known_feasible, delta, iterations)
             deviation = pose_sum(pose_difference(se3_to_array(pose), real_pose), deviation)
             pose_trajectory_msg.points.append(MultiDOFJointTrajectoryPoint(
-                transforms=[array_to_transform_msg(real_pose)]), time_from_start=point.time_from_start)
+                transforms=[array_to_transform_msg(real_pose)], time_from_start=point.time_from_start))
 
             if joints is None:
                 joint_trajectory_msg.points.append(JointTrajectoryPoint())
                 return joint_trajectory_msg, pose_trajectory_msg, deviation
 
-            joint_trajectory_msg.points.append(JointTrajectoryPoint(positions=joints,
+            joint_trajectory_msg.points.append(JointTrajectoryPoint(positions=joints, 
                                                                     time_from_start=point.time_from_start))
 
+            known_feasible = array_to_transform_msg(real_pose)
+
         return joint_trajectory_msg, pose_trajectory_msg, deviation
+
+    def joint_names(self):
+        return self._joint_names
