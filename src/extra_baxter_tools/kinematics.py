@@ -1,7 +1,7 @@
 import numpy as np
 from baxter_pykdl import baxter_kinematics
 from conversions import spatial_to_arrays, se3_to_array, array_to_transform_msg
-from tf.transformations import quaternion_multiply, quaternion_inverse
+from tf.transformations import quaternion_multiply, quaternion_inverse, euler_from_quaternion
 from trajectory_msgs.msg import MultiDOFJointTrajectory, MultiDOFJointTrajectoryPoint, JointTrajectory, \
     JointTrajectoryPoint
 
@@ -18,6 +18,13 @@ def pose_difference(p1, p2):
 def pose_sum(p1, p2):
     pos_sum = p1[:3] + p2[:3]
     return np.append(pos_sum, quaternion_multiply(p1[3:], p2[3:]))
+
+
+def differentiate_pose_trajectory(poses, time):
+    quats = poses[:, 3:]
+    euler = np.array([euler_from_quaternion(quat) for quat in quats])
+    poses = np.hstack((poses[:, :3], euler))
+    return np.diff(poses, axis=0) / np.diff(time).reshape(-1, 1)
 
 
 class ExtendedBaxterKinematics(baxter_kinematics):
