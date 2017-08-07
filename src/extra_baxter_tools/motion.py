@@ -248,11 +248,11 @@ class Jab(Segment):
         start_pos, displacement, start_quat, rotation = self.get_parts()
         out_jab_pos = displacement * 2.0 / self.duration
         pos = np.vstack((out_jab_pos, -out_jab_pos))
-        out_jab_ang = euler_from_quaternion(rotation) / self.duration
+        out_jab_ang = np.array(euler_from_quaternion(rotation)) / self.duration
         ang = np.vstack((out_jab_ang, -out_jab_ang))
         time = np.array([0, self.duration/2]) + start_time
 
-        return arrays_to_multi_dof_trajectory_msg(np.hstack(pos, ang), time, component='velocities')
+        return arrays_to_multi_dof_trajectory_msg(np.hstack((pos, ang)), time, component='velocities')
 
 
 class Waypoint(Segment):
@@ -275,7 +275,8 @@ class EETrajectoryRecorder(object):
                             'j': self.add_jab,
                             'p': self.add_polygon,
                             'c': self.add_circle,
-                            'l': self.play_last}
+                            'lp': self.play_last_pos,
+                            'lv': self.play_last_vel}
 
         self.limb = limb
         self.segments = []
@@ -368,8 +369,11 @@ class EETrajectoryRecorder(object):
 
         return MultiDOFJointTrajectory(points=points)
 
-    def play_last(self, rate=20):
+    def play_last_pos(self, rate=20):
         self.play_trajectory(self.segments[-1].draw_pos(rate, max(self.transition_times[-1], 3)), self.limb)
+
+    def play_last_vel(self, rate=20):
+        self.play_trajectory(self.segments[-1].draw_vel(rate, max(self.transition_times[-1], 3)), self.limb)
 
     def new_segment(self):
         resp = raw_input('Press ENTER to quit or choose one of the following options:\n'
@@ -377,7 +381,8 @@ class EETrajectoryRecorder(object):
             'j: new jab\n'
             'p: new polygon\n'
             'c: new circle\n'
-            'l: play last segment\n\n')
+            'lp: play last segment pos\n'
+            'lv: play last segment pos\n\n')
 
         if resp in self.segment_map:
             self.segment_map[resp]()

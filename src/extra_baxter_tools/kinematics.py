@@ -97,5 +97,30 @@ class ExtendedBaxterKinematics(baxter_kinematics):
 
         return joint_trajectory_msg, pose_trajectory_msg, deviation
 
+    def invert_trajectory_msg_vel(self, trajectory):
+        joint_trajectory_msg = JointTrajectory(header=trajectory.header, joint_names=self._joint_names)
+        twist_trajectory_msg = MultiDOFJointTrajectory(header=trajectory.header)
+        
+
+        deviation = np.zeros(6)
+
+        for point in trajectory.points:
+            pose = point.transforms[0]
+            joints, real_pose = self.soft_inverse_from_msg(pose, known_feasible, delta, iterations)
+            deviation = pose_sum(pose_difference(se3_to_array(pose), real_pose), deviation)
+            pose_trajectory_msg.points.append(MultiDOFJointTrajectoryPoint(
+                transforms=[array_to_transform_msg(real_pose)], time_from_start=point.time_from_start))
+
+            if joints is None:
+                joint_trajectory_msg.points.append(JointTrajectoryPoint())
+                return joint_trajectory_msg, pose_trajectory_msg, deviation
+
+            joint_trajectory_msg.points.append(JointTrajectoryPoint(positions=joints, 
+                                                                    time_from_start=point.time_from_start))
+
+            known_feasible = array_to_transform_msg(real_pose)
+
+        return joint_trajectory_msg, pose_trajectory_msg, deviation
+
     def joint_names(self):
         return self._joint_names
