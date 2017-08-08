@@ -55,10 +55,17 @@ from motion import saturate_trajectory_pos, saturate_trajectory_vel
 from kinematics import ExtendedBaxterKinematics
 
 
-def send_multi_dof_trajectory(trajectory, limb):
+def send_multi_dof_trajectory(trajectory, limb, vel):
     bjt = BaxterJointTrajectory(limb)
     ebk = ExtendedBaxterKinematics(limb)
-    bjt.set_trajectory(ebk.invert_trajectory_msg(trajectory)[0])
+    if not vel:
+        joint_traj, _, _, start_joints = ebk.invert_trajectory_msg(trajectory)
+    else:
+        joint_traj, _, _, start_joints = ebk.invert_trajectory_msg_vel(trajectory)
+
+    bjt.set_trajectory(joint_traj, ebk.joint_dict(start_joints))
+
+    bjt.saturate_trajectory()
     bjt.start()
     del(bjt, ebk)
 
@@ -82,6 +89,7 @@ class BaxterJointTrajectory(object):
             sys.exit(1)
         self.clear(limb)
         self._limb = baxter_interface.Limb(limb)
+        self._inital_conditions = self._limb.joint_angles()
 
     def add_point(self, positions, time):
         point = JointTrajectoryPoint()
@@ -89,10 +97,13 @@ class BaxterJointTrajectory(object):
         point.time_from_start = rospy.Duration(time)
         self._goal.trajectory.points.append(point)
 
-    def set_trajectory(self, trajectory):
+    def set_trajectory(self, trajectory, initial_conditions):
         self._goal.trajectory = trajectory
+        self._inital_conditions = initial_conditions
 
-    def start(self):
+    def start(self, move_to_start=True):
+        if move_to_start:
+                self._limb.move_to_joint_positions(self._inital_conditions)
         self.prepend_current()
         self._goal.trajectory.header.stamp = rospy.Time.now()
         self._client.send_goal(self._goal)

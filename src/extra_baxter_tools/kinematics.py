@@ -1,6 +1,6 @@
 import numpy as np
 from baxter_pykdl import baxter_kinematics
-from conversions import spatial_to_arrays, se3_to_array, array_to_transform_msg
+from conversions import spatial_to_arrays, se3_to_array, array_to_transform_msg, twist_to_array, array_to_twist_msg
 from tf.transformations import quaternion_multiply, quaternion_inverse, euler_from_quaternion
 from trajectory_msgs.msg import MultiDOFJointTrajectory, MultiDOFJointTrajectoryPoint, JointTrajectory, \
     JointTrajectoryPoint
@@ -95,32 +95,61 @@ class ExtendedBaxterKinematics(baxter_kinematics):
 
             known_feasible = array_to_transform_msg(real_pose)
 
-        return joint_trajectory_msg, pose_trajectory_msg, deviation
+        return joint_trajectory_msg, pose_trajectory_msg, deviation, np.array(joint_trajectory_msg.points[0].positions)
 
-    def invert_trajectory_msg_vel(self, trajectory):
+    def invert_trajectory_msg_vel(self, trajectory, start_joints=None):
+        if start_joints is None:
+            pos, orientation = spatial_to_arrays(trajectory.points[0].transforms[0])
+            start_joints = np.array(self.inverse_kinematics(list(pos), list(orientation)))
+
         joint_trajectory_msg = JointTrajectory(header=trajectory.header, joint_names=self._joint_names)
         twist_trajectory_msg = MultiDOFJointTrajectory(header=trajectory.header)
         
-
         deviation = np.zeros(6)
 
+        last_t = 0.0
+        joints = start_joints
+        joint_vel = np.zeros(7)
+
         for point in trajectory.points:
-            pose = point.transforms[0]
-            joints, real_pose = self.soft_inverse_from_msg(pose, known_feasible, delta, iterations)
-            deviation = pose_sum(pose_difference(se3_to_array(pose), real_pose), deviation)
-            pose_trajectory_msg.points.append(MultiDOFJointTrajectoryPoint(
-                transforms=[array_to_transform_msg(real_pose)], time_from_start=point.time_from_start))
+            twist = twist_to_array(point.velocities[0])
+            t = point.time_from_start.to_sec()
+            dt = t - last_t
+            last_t = t
+            joints += joint_vel * dt
+            joint_vel, real_twist = self.soft_inverse_velocity(twist, self.joint_dict(joints))
+            deviation += abs(real_twist - twist)
+            twist_trajectory_msg.points.append(MultiDOFJointTrajectoryPoint(
+                velocities=[array_to_twist_msg(real_twist)], time_from_start=point.time_from_start))
 
-            if joints is None:
-                joint_trajectory_msg.points.append(JointTrajectoryPoint())
-                return joint_trajectory_msg, pose_trajectory_msg, deviation
-
-            joint_trajectory_msg.points.append(JointTrajectoryPoint(positions=joints, 
+            joint_trajectory_msg.points.append(JointTrajectoryPoint(velocities=joint_vel, 
                                                                     time_from_start=point.time_from_start))
 
-            known_feasible = array_to_transform_msg(real_pose)
 
-        return joint_trajectory_msg, pose_trajectory_msg, deviation
+        return joint_trajectory_msg, twist_trajectory_msg, deviation, start_joints
+
+    def inverse_velocity(self, twist, joint_angles):
+        pjac = self.jacobian_pseudo_inverse(joint_angles)
+        return np.array(pjac).dot(twist)
+
+    def soft_inverse_velocity(self, twist, joint_angles):
+        full_jac = self.jacobian(joint_angles)
+        jac = full_jac
+        if np.linalg.matrix_rank(jac, tol=0.1) != 6:
+            pos_jac = jac[0:3, :]
+            if np.linalg.matrix_rank(jac, tol=0.1) != 3:
+                return np.zeros(7)
+
+            else:
+                jac = pos_jac
+
+        pjac = np.linalg.pinv(jac)
+        joint_vel = np.array(pjac).dot(twist)
+        real_twist = np.array(full_jac).dot(joint_vel)
+        return joint_vel, real_twist
 
     def joint_names(self):
         return self._joint_names
+
+    def joint_dict(self, values):
+        return {name: val for name, val in zip(self._joint_names, values)}

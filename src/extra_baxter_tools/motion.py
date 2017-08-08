@@ -8,6 +8,7 @@ import numpy as np
 import rospy
 from abc import ABCMeta, abstractmethod
 from tf.transformations import euler_from_quaternion, quaternion_inverse
+import pdb
 
 
 def unit_quaternion(*args):
@@ -23,6 +24,8 @@ def saturate_trajectory_pos(joint_trajectory, uniform=False):
     :param bool uniform:
     :return:
     """
+    if len(joint_trajectory.points[-1].positions) == 0:
+        return joint_trajectory
     positions, time = trajectory_to_arrays(joint_trajectory)
     new_positions = positions.copy()
     min_scale = 1
@@ -146,7 +149,9 @@ class Circle(Segment):
 
         velocities = differentiate_pose_trajectory(trajectory_points, time)
         velocities = np.vstack((velocities, np.zeros(6)))
-        return arrays_to_joint_trajectory_msg(velocities, time, component='velocities')
+        traj = arrays_to_multi_dof_trajectory_msg(velocities, time, component='velocities')
+        traj.points[0].transforms = [self.start_point]
+        return traj
 
 
 class Polygon(Segment):
@@ -208,7 +213,9 @@ class Polygon(Segment):
         ang_velocities = np.array([euler_from_quaternion(quat) for quat in rotations]) / self.duration
         velocities = np.hstack((pos_velocities, ang_velocities))
 
-        return arrays_to_multi_dof_trajectory_msg(velocities, time, component='velocities')
+        traj = arrays_to_multi_dof_trajectory_msg(velocities, time, component='velocities')
+        traj.points[0].transforms = [self.start_point]
+        return traj
 
 
 class Jab(Segment):
@@ -242,7 +249,9 @@ class Jab(Segment):
         if hold_orientation:
             quat = np.ones((pos.shape[0], 4)) * start_quat.reshape((1, 4))
 
-        return arrays_to_multi_dof_trajectory_msg(np.hstack((pos, quat)), time)
+        traj = arrays_to_multi_dof_trajectory_msg(np.hstack((pos, quat)), time)
+        traj.points[0].transforms = [self.start_point]
+        return traj
 
     def draw_vel(self, rate, start_time, hold_orientation=True):
         start_pos, displacement, start_quat, rotation = self.get_parts()
@@ -252,7 +261,9 @@ class Jab(Segment):
         ang = np.vstack((out_jab_ang, -out_jab_ang))
         time = np.array([0, self.duration/2]) + start_time
 
-        return arrays_to_multi_dof_trajectory_msg(np.hstack((pos, ang)), time, component='velocities')
+        traj = arrays_to_multi_dof_trajectory_msg(np.hstack((pos, ang)), time, component='velocities')
+        traj.points[0].transforms = [self.start_point]
+        return traj
 
 
 class Waypoint(Segment):
@@ -264,7 +275,9 @@ class Waypoint(Segment):
         return arrays_to_multi_dof_trajectory_msg(pose_to_array(self.start_point).reshape((1, 7)), np.array([start_time]))
 
     def draw_vel(self, rate, start_time, hold_orientation=True):
-        return arrays_to_multi_dof_trajectory_msg(np.zeros((1, 7)), np.array([start_time]), component='velocities')
+        traj = arrays_to_multi_dof_trajectory_msg(np.zeros((1, 7)), np.array([start_time]), component='velocities')
+        traj.points[0].transforms = [self.start_point]
+        return traj
 
 
 class EETrajectoryRecorder(object):
@@ -350,7 +363,7 @@ class EETrajectoryRecorder(object):
             normal = get_normal_to_points(p1, p2, p3)
             
         else:
-            sign = -1 if '-' in resp else 1
+            sign = -1.0 if '-' in resp else 1.0
             resp = resp[-1]
             normal = [sign*int(v == resp) for v in 'xyz']
             setattr(far_point.position, resp, getattr(start_point.position, resp))
@@ -373,7 +386,7 @@ class EETrajectoryRecorder(object):
         self.play_trajectory(self.segments[-1].draw_pos(rate, max(self.transition_times[-1], 3)), self.limb)
 
     def play_last_vel(self, rate=20):
-        self.play_trajectory(self.segments[-1].draw_vel(rate, max(self.transition_times[-1], 3)), self.limb)
+        self.play_trajectory(self.segments[-1].draw_vel(rate, max(self.transition_times[-1], 3)), self.limb, vel=True)
 
     def new_segment(self):
         resp = raw_input('Press ENTER to quit or choose one of the following options:\n'
