@@ -533,9 +533,12 @@ class WeightedKinematicCostDescentEstimator(ControllerEstimator):
         targets = np.concatenate(input_arrays).squeeze()
         features = -np.concatenate(input_bases_arrays, axis=0)
         fit = self.least_squares(features, targets)
+        if len(fit[1]) == 0:
+            return {weight_name: 0.0 for weight_name in self.weight_names + ['adjusted_r_squared']}
+
         result = {weight_name: val for weight_name, val in zip(self.weight_names, fit[0])}
         n, k = features.shape
-        result['adjusted_r_squared'] = 1 - (1 - fit[1] / np.sum((targets-targets.mean()) ** 2)) * (n - 1) / (n - k - 1)
+        result['adjusted_r_squared'] = 1 - (1 - float(fit[1]) / np.sum((targets-targets.mean()) ** 2)) * (n - 1) / (n - k - 1)
         return result
 
     def register_buffer(self, buffer):

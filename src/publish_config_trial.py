@@ -40,6 +40,7 @@ def main():
 
     # Initialize the tree
     kin_tree = kinmodel.KinematicTree(json_filename=args.kinmodel_json_optimized)
+    # kin_tree = kinmodel.KinematicTree(json_filename='/home/pedge/shoulder_data/shoulder_elbow_opt.json')
     config_reference_1 = KinematicTreeTracker('tree_tracker', kin_tree).process_frame(data['goal'][:, :, None])
 
     # Hard coded config reference from looking at the raw data
