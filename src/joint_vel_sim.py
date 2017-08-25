@@ -12,16 +12,16 @@ from pykdl_utils.kdl_kinematics import KDLKinematics
 from urdf_parser_py.urdf import URDF
 
 
-
 class LeftRightSubscriber(object):
 
     def __init__(self, prefix, suffix, message_type, cb):
         self.sub_l = rospy.Subscriber(prefix + '/left/' + suffix, message_type, cb)
-        self.sub_r = rospy.Subscriber('/robot/limb/right/joint_command', message_type, cb)
+        self.sub_r = rospy.Subscriber(prefix + '/right/' + suffix, message_type, cb)
 
     def unregister(self):
         self.sub_l.unregister()
         self.sub_r.unregister()
+
 
 class JointVelocityRelay():
 
@@ -38,79 +38,53 @@ class JointVelocityRelay():
                            name=name)
 
     def __init__(self, rate=100):
-        self.sub = None
+        self.sub = LeftRightSubscriber('/robot/limb', 'joint_command', JointCommand, self.update)
+        self.joint_state_sub = rospy.Subscriber('joint_vel_sim/joint_states/pos', JointState, self.update_joint_state)
         self.timer = None
-        self.vel_control = rospy.get_param('~vel_control', True)
-        rospy.set_param("~vel_control", self.vel_control)
         self.rate = rate
         self.current = copy(self.start_pos)
         self.pub = rospy.Publisher('robot/joint_states', JointState, queue_size=100)
-        self.srv = rospy.Service('~switch', Empty, self.switch)
         self.left_endpoint_pub = rospy.Publisher('/robot/limb/left/endpoint_state', EndpointState, queue_size=100)
         self.right_endpoint_pub = rospy.Publisher('/robot/limb/right/endpoint_state', EndpointState, queue_size=100)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         self.endpoint_sub = rospy.Subscriber('tf', TFMessage, self.publish_endpoints)
-        if self.vel_control:
-            self.vel_init()
-        else:
-            self.pos_init()
-
+        self.vel = False
+        self.sub = LeftRightSubscriber('/robot/limb', 'joint_command', JointCommand, self.update)
+        self.timer = rospy.Timer(rospy.Duration(1.0 / self.rate), self.publish)
         rospy.loginfo("Initialization complete.")
-
-    def switch(self, req):
-        self.shutdown()
-
-        if self.vel_control:
-            self.pos_init()
-
-        else:
-            self.vel_init()
-
-        self.vel_control = not self.vel_control
-        rospy.set_param("~vel_control", self.vel_control)
-
-        return EmptyResponse()
-
-    def vel_init(self):
-        self.sub = LeftRightSubscriber('/robot/limb', 'joint_command', JointCommand, self.update_vel)
-        self.timer = rospy.Timer(rospy.Duration(1.0 / self.rate), self.publish_vel)
-
-    def vel_init_states(self):
-        self.sub = rospy.Subscriber('~joint_states/vel', JointState, self.update_vel)
-        self.timer = rospy.Timer(rospy.Duration(1.0 / self.rate), self.publish_vel)
-
-    def pos_init(self):
-        self.sub = rospy.Subscriber('~joint_states/pos', JointState, self.update_pos)
-        self.timer = rospy.Timer(rospy.Duration(1.0 / self.rate), self.publish_pos)
 
     def shutdown(self):
         self.sub.unregister()
         self.timer.shutdown()
 
-    def publish_vel(self, event):
-        self.current.position += self.current.velocity * self.timer._period.to_sec()
+    def publish(self, event):
+        if self.vel:
+            self.current.position += self.current.velocity * self.timer._period.to_sec()
+
         self.current.header = Header(stamp=rospy.Time.now())
         self.pub.publish(self.current)
 
-    def update_vel(self, msg):
-        for command, name in zip(msg.command, msg.names):
-            self.current.velocity[self.current.name.index(name)] = command
+    def update_joint_state(self, msg):
+        jc = JointCommand(command=msg.position, names=msg.name, mode=JointCommand.POSITION_MODE)
+        self.update(jc)
 
-    def update_vel_states(self, msg):
-        self.current.velocity = np.array(msg.velocity)
+    def update(self, msg):
+        self.vel = msg.mode == msg.VELOCITY_MODE
+        new = self.get_new(msg)
+        if self.vel:
+            self.current.velocity = new
 
-    def publish_pos(self, event):
-        self.current.header = Header(stamp=rospy.Time.now())
-        self.pub.publish(self.current)
+        else:
+            self.current.velocity = (self.current.position - new) / self.timer._period.to_sec()
+            self.current.position = new
 
-    def update_pos(self, msg):
-        if len(self.current.name) < len(msg.name):
-            self.current.name = msg.name
-            self.current.position = np.append(self.current.position, msg.position[len(self.current.position):])
-
-        self.current.velocity = (self.current.position - np.array(msg.position)) / self.timer._period.to_sec()
-        self.current.position = np.array(msg.position)
+    def get_new(self, msg):
+        vel = msg.mode == msg.VELOCITY_MODE
+        new = self.current.velocity.copy() if vel else self.current.position.copy()
+        for name, val in zip(msg.names, msg.command):
+            new[self.current.name.index(name)] = val
+        return new
 
     def publish_endpoints(self, msg):
         try:
@@ -129,6 +103,7 @@ class JointVelocityRelay():
 
         self.left_endpoint_pub.publish(left_msg)
         self.right_endpoint_pub.publish(right_msg)
+
 
 class BoxJointVelocityRelay():
 

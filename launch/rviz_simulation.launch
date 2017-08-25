@@ -19,7 +19,7 @@
   </node>
 
   <!-- Open the realy node which takes partially filled JointState messages and fills in the rest -->
-  <node name="joint_vel_sim" pkg="baxter_force_control" type="joint_vel_sim.py" />
+  <node name="joint_vel_sim" pkg="baxter_force_control" type="joint_vel_sim.py" output="screen" />
 
   <!-- Link the robot state publisher to the output of the relay node -->
   <node name="robot_state_publisher" pkg="robot_state_publisher" type="state_publisher"> 
