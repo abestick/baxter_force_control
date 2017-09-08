@@ -6,7 +6,8 @@ import numpy as np
 import rospy
 import tf
 from sensor_msgs.msg import JointState, PointCloud
-from geometry_msgs.msg import PoseStamped, Pose, Point, Quaternion, TwistStamped, Twist, Vector3, Point32
+from geometry_msgs.msg import PoseStamped, Pose, Point, Quaternion, TwistStamped, Twist, Vector3, Point32, \
+    WrenchStamped, Wrench
 from tf2_msgs.msg import TFMessage
 from std_msgs.msg import Header
 from scipy.optimize import nnls
@@ -85,6 +86,18 @@ class TwistPublisher(EdgePublisher):
         return TwistStamped(header=header, twist=Twist(linear=Vector3(*twist.nu()), angular=Vector3(*twist.omega())))
 
 
+class WrenchPublisher(EdgePublisher):
+
+    def __init__(self, topic_name, reference_frame, bag=None, get_time=None):
+        self.reference_frame = reference_frame
+        super(WrenchPublisher, self).__init__(topic_name, WrenchStamped, self.twist_to_wrench_msg, bag, get_time)
+
+    def twist_to_wrench_msg(self, twist):
+        (_, twist), = twist.items()
+        header = Header(stamp=rospy.Time.now(), frame_id=self.reference_frame)
+        return WrenchStamped(header=header, wrench=Wrench(force=Vector3(*twist.nu()), torque=Vector3(*twist.omega())))
+
+
 class PointCloudPublisher(EdgePublisher):
 
     def __init__(self, topic_name, reference_frame, bag=None, get_time=None):
@@ -106,7 +119,7 @@ class TFPublisher(Steppable):
 
     def step(self, transform):
         (_, transform), = transform.items()
-        transform = transform.inv()
+        transform = transform
         self.br.sendTransform(transform.p(),
                          tf.transformations.quaternion_from_matrix(transform.R(homog=True)),
                          rospy.Time.now(),
@@ -190,6 +203,15 @@ class Selector(Steppable):
 
     def step(self, states):
         return {new_key: states[key] for key, new_key in self.keys.items() if key in states}
+
+
+class Modifier(Steppable):
+
+    def __init__(self, mod_func):
+        self.mod_func = mod_func
+
+    def step(self, states):
+        return {k: self.mod_func(v) for k, v in states.items()}
 
 
 class Delay(Steppable):
@@ -318,9 +340,10 @@ class MocapFrameEstimator(Estimator):
     """
     Estimates a transform to a particular tracked frame in the mocap data
     """
-    def __init__(self, mocap_frame_tracker, tracked_frame_name):
+    def __init__(self, mocap_frame_tracker, tracked_frame_name, wrt_world=True):
         self._mocap_frame_tracker = mocap_frame_tracker
         self._frame_name = tracked_frame_name
+        self._wrt_world = wrt_world
 
     def step(self, measurement):
         # make sure the dictionary has a single value which is the mocap frame
@@ -330,8 +353,14 @@ class MocapFrameEstimator(Estimator):
         (_, frame), = measurement.items()
 
         transform = self._mocap_frame_tracker.process_frame(frame)
+        if transform is not None:
+            if self._wrt_world:
+                transform = transform.inv()
 
-        return {self._frame_name: transform if transform is not None else kinmodel.Transform(homog_array=np.identity(4))}
+        else:
+            transform = kinmodel.Transform()
+
+        return {self._frame_name: transform}
 
 
 class Transformer(Steppable):
