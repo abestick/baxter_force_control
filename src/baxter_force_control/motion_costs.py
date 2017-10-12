@@ -231,7 +231,8 @@ class WeightedCostCombination(StateCost):
     def gradient_bases(self, state_dict):
         # This is a (C, X) Jacobian object with each row being the direction of maximal ascent for that basis cost
         # function.
-        return Jacobian.vstack([cost_func.gradient(state_dict) for cost_func in self.cost_funcs.values()])
+        return Jacobian.vstack([cost_func.gradient(state_dict).pad(column_names=self.get_required_state_vars())
+                                for cost_func in self.cost_funcs.values()])
 
     def get_basis_names(self):
         return self.cost_funcs.keys()

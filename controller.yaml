@@ -1,0 +1,14 @@
+costs:
+  configuration:
+    joint_0: 0.0
+    joint_1: 0.0
+    joint_2: 0.0
+    joint_3: 0.0
+  ergonomic:
+    shoulder_0: 0.0
+    shoulder_1: 0.0
+    shoulder_2: 0.0
+    elbow: 0.0
+passive_model: null
+input_model: input_model.p
+disturbance_model: disturbance_model.p

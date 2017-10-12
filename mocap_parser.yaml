@@ -1,0 +1,11 @@
+chains:
+  human:
+    file: peter.json
+    transforms:
+      - human: base
+      - hand_grip: joint_
+  object:
+    file: object.json
+    transforms:
+      - grip: joint_3
+      - robot: joint_0

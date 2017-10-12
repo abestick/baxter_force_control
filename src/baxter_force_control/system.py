@@ -5,7 +5,7 @@ from graphviz import Digraph
 import time
 import pandas as pd
 import rospy
-from steppables import Steppable
+from steppables import Steppable, PandaSink
 
 
 class Node(object):
@@ -123,6 +123,7 @@ class ForwardBlockNode(BlockNode):
     def add_raw_output(self, other_steppable, block_name, output_name, step_arg_name):
         other_node = ForwardBlockNode(other_steppable, block_name, output_name)
         self.add_output(other_node, step_arg_name)
+        return other_node
 
     def remove_output(self, node_name):
         node, step_arg_name = self._output_nodes.pop(node_name)
@@ -183,6 +184,12 @@ class ForwardBlockNode(BlockNode):
     def __str__(self):
         return '[ForwardBlockNode "%s"]' % self._name
 
+    def sink(self, block_name):
+        return self.add_raw_output(PandaSink(), block_name, None, 'states')
+
+    def steppable(self):
+        return self._steppable
+
 
 class ForwardRoot(Node):
     """
@@ -234,6 +241,7 @@ class BackwardBlockNode(BlockNode):
     def add_raw_input(self, other_steppable, block_name, step_arg_name, replace=True):
         other_node = BackwardBlockNode(other_steppable, block_name)
         self.add_input(other_node, step_arg_name, replace)
+        return other_node
 
     def is_locally_connected(self):
         """
@@ -365,10 +373,10 @@ class System(object):
             try:
                 self.step(record)
                 if print_steps >= 0 and self.steps % print_steps == 0:
-                    print(self.steps)
+                    print('%d: %f' % (self.steps, self.steps/self.framerate))
                 self.steps += 1
 
-            except (EOFError, KeyboardInterrupt):
+            except (EOFError, KeyboardInterrupt, StopIteration):
                 break
 
         groups = {group: self._all_edges[group].keys() for group in self._all_edges}
@@ -386,10 +394,10 @@ class System(object):
             try:
                 self.step(record)
                 if print_steps >= 0 and self.steps % print_steps == 0:
-                    print(self.steps)
+                    print('%d: %f' % (self.steps, self.steps/self.framerate))
                 self.steps += 1
 
-            except (EOFError, KeyboardInterrupt):
+            except (EOFError, KeyboardInterrupt, StopIteration):
                 break
 
             rate.sleep()
