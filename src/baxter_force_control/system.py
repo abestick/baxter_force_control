@@ -390,14 +390,15 @@ class System(object):
         rate = rospy.Rate(rate)
         self.start_time = time.time()
 
-        while True:
+        while not rospy.is_shutdown():
             try:
                 self.step(record)
                 if print_steps >= 0 and self.steps % print_steps == 0:
                     print('%d: %f' % (self.steps, self.steps/self.framerate))
                 self.steps += 1
 
-            except (EOFError, KeyboardInterrupt, StopIteration):
+            except (EOFError, KeyboardInterrupt, StopIteration, rospy.ROSException):
+                print('Ending loop.')
                 break
 
             rate.sleep()

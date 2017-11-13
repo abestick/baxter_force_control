@@ -230,14 +230,7 @@ def find_ergo_reference(trial_bag, dt):
     return dict(zip(arm_joints, mean_ergo_joints))
 
 
-def process(trial_bag, box_kin_tree, human_kin_tree, dt, config_cost, ergo_cost, diagram_filename=None, pos_only=True):
-
-    # Create source
-    bag_reader = BagReader(trial_bag)
-    bag_reader.step()
-    bag_reader_node = ForwardBlockNode(bag_reader, 'Bag Reader', 'msgs')
-    print('Number of data points: %d' % len(bag_reader))
-
+def attach_frames(bag_reader, box_kin_tree, human_kin_tree):
     input_features = box_kin_tree.get_joints()['joint_3'].children
     input_points = [np.array(p.primitive) for p in input_features]
     grip_location = grip_point(input_points)
@@ -259,8 +252,19 @@ def process(trial_bag, box_kin_tree, human_kin_tree, dt, config_cost, ergo_cost,
 
     box_frame_tracker.attach_frame('joint_0', 'robot', tf_pub=False)
     box_frame_tracker.attach_frame('joint_3', 'grip', tf_pub=False, position=grip_location)
+    return box_frame_tracker, human_frame_tracker
 
+
+def process(trial_bag, box_kin_tree, human_kin_tree, dt, config_cost, ergo_cost, diagram_filename=None, pos_only=True):
     # Define the root (all source nodes)
+
+    # Create source
+    bag_reader = BagReader(trial_bag)
+    bag_reader.step()
+    bag_reader_node = ForwardBlockNode(bag_reader, 'Bag Reader', 'msgs')
+    print('Number of data points: %d' % len(bag_reader))
+
+    box_frame_tracker, human_frame_tracker = attach_frames(bag_reader, box_kin_tree, human_kin_tree)
     root = ForwardRoot([bag_reader_node]) #, zero_twist_node])
 
     # Create the system
