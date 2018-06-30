@@ -52,7 +52,7 @@ def extract_kinematics():
     results_pickle = HOME + '/experiment/results/%s_results.p' % args.participant
     participant_results_dir = HOME + '/experiment/results/%s' % args.participant
     block_diagram_path = participant_results_dir + '/%s_extract.gv' % args.participant
-    bag_path = participant_results_dir + '/profile/' #kinematics_extracted2
+    bag_path = participant_results_dir + '/prepres/' #kinematics_extracted2
 
     create_dir(participant_results_dir)
     create_dir(bag_path)

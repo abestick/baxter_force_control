@@ -48,7 +48,7 @@ def process_kinematics():
     participant_ref_json = HOME + '/experiment/%s/%s_ergo_ref.json' % (args.participant, args.participant)
     participant_results_dir = HOME + '/experiment/results/%s' % args.participant
     block_diagram_path = participant_results_dir + '/%s_process.gv' % args.participant
-    bag_path = participant_results_dir + '/kinematics_extracted2/'
+    bag_path = participant_results_dir + '/prepres/'
     results_dir = participant_results_dir + '/processed/%s/' % folder_name
 
     create_dir(results_dir)
@@ -90,7 +90,7 @@ def process_kinematics():
     config_cost_1 = QuadraticDisplacementCost('configuration_cost', config_reference_0, lambda x: x, config_reference_0.keys())
     config_cost_2 = QuadraticDisplacementCost('ergonomic_cost', ergo_reference, lambda x: x, ergo_reference.keys())
 
-    for i, trial in enumerate(bags):
+    for i, trial in enumerate(bags[2:]):
         trial_bag = Bag(bag_path + trial, 'r')
         # If its the first element, it is the combined data, change i to ALL and set to plot the block diagram
         if i == 0:

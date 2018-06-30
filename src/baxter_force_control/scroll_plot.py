@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.colors import to_rgba
@@ -5,28 +6,31 @@ import numpy as np
 import pandas as pd
 from itertools import compress
 
-nn = 0
+nn = 1
 nnls = 'nnls_' if nn else ''
 nnls_ = '_nnls' if nn else ''
 mode = 'relative'
 # mode = 'static'
 mode_s = 'rel' if mode == 'relative' else 'stat'
 run = 'jolts_2'
+folder = 'prepres'
 
 data = pd.read_pickle(
-    '/home/pedge/experiment/results/peter1/processed/last/peter1_%s/%s%s_velocity_estimator_sink.p' %(run, nnls, mode_s))
+    '/home/pedge/experiment/results/peter1/processed/%s/peter1_%s/%s%s_velocity_estimator_sink.p' %(folder, run, nnls, mode_s))
 udata = pd.read_pickle(
-    '/home/pedge/experiment/results/peter1/processed/last/peter1_%s/%s%s_controller_estimator_sink.p' %(run, nnls, mode_s))
+    '/home/pedge/experiment/results/peter1/processed/%s/peter1_%s/%s%s_controller_estimator_sink.p' %(folder, run, nnls, mode_s))
 weight_data = pd.read_pickle(
-    '/home/pedge/experiment/results/peter1/processed/last/peter1_%s/merger_sink.p' % run)
+    '/home/pedge/experiment/results/peter1/processed/%s/peter1_%s/merger_sink.p' % (folder,run))
+# weight_datal = pd.read_pickle(
+#     '/home/pedge/experiment/results/peter1/processed/last/peter1_%s/merger_sink.p' % (run))
 
 print(weight_data.columns)
 
-erg_weights = np.array(weight_data['ergonomic_cost_1_%s%s' % (mode, nnls_)])
-conf_weights = np.array(weight_data['configuration_cost_1_%s%s' % (mode, nnls_)])
+erg_weights = np.array(weight_data['ergonomic_cost_10_%s%s' % (mode, nnls_)])
+conf_weights = np.array(weight_data['configuration_cost_10_%s%s' % (mode, nnls_)])
 robot_mag = np.array(weight_data['robot_twist'])
 if mode == 'relative':
-    ff_weights = np.array(weight_data['ff_gain_1_%s%s' % (mode, nnls_)])
+    ff_weights = np.array(weight_data['ff_gain_10_%s%s' % (mode, nnls_)])
 
 erg_weights /= 10.0 #erg_weights.max()
 conf_weights /= 10.0 #conf_weights.max()
@@ -36,7 +40,7 @@ if mode == 'relative':
 xyz_order = data.pop('V_order')
 # data.pop('V_ff_gain')
 # check all same
-print(data.columns)
+print(list(udata.columns))
 
 quivers = []
 u_norms = []

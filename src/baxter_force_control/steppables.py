@@ -757,7 +757,7 @@ class MocapFrameEstimator(Estimator):
 
         transform = self._mocap_frame_tracker.process_frame(frame)
         if transform is not None:
-            if self._wrt_world:
+            if not self._wrt_world:
                 transform = transform.inv()
 
         else:
@@ -1019,7 +1019,7 @@ class WeightedCostGradients(CostGradient):
 
 class JacobianOperator(Steppable):
 
-    def __init__(self, kin_tree_tracker, base_frame, manip_frame, inv=False, position_only=False, theano=True):
+    def __init__(self, kin_tree_tracker, base_frame, manip_frame, inv=False, position_only=False, theano=False):
         if theano:
             self._compute_jacobian = get_jacobian_func(kin_tree_tracker.kin_tree(), base_frame, manip_frame)[0]
         else:
@@ -1050,7 +1050,7 @@ class JacobianOperator(Steppable):
 
 class JacobianCalculator(Steppable):
 
-    def __init__(self, kin_tree_tracker, base_frame, manip_frame, inv=False, position_only=False, theano=True):
+    def __init__(self, kin_tree_tracker, base_frame, manip_frame, inv=False, position_only=False, theano=False):
         if theano:
             self._compute_jacobian = get_jacobian_func(kin_tree_tracker.kin_tree(), base_frame, manip_frame)[0]
         else:
@@ -1285,10 +1285,11 @@ class WeightedKinematicCostDescentEstimatorBases(Steppable):
     A ControllerEstimator for the WeightedKinematicCostDescent ControlLaw. Estimates the weight vector
     """
 
-    def __init__(self, disturbance=True, method='LS', zero_thresh=1e-15):
+    def __init__(self, disturbance=True, method='LS', zero_thresh=1e-15, null=True):
         self.disturbance=disturbance
         self.method = method
         self.zero_thresh = zero_thresh
+        self.null = null
 
     def _step(self, cost_descents, input, J_RG, J_HG, RG_V_RH):
         cost_descents = cost_descents.values()[0]
@@ -1314,6 +1315,8 @@ class WeightedKinematicCostDescentEstimatorBases(Steppable):
             d *= 0
 
         B = np.vstack((np.eye(len(h_order)), J_RGp_J_HG))
+        N = np.identity(B.shape[1]) - np.dot(np.linalg.pinv(B), B)
+
         D = np.vstack((np.zeros((len(o_order), 3)), J_RGp))
         dCdx = np.array(dCdx)
 
@@ -1330,11 +1333,15 @@ class WeightedKinematicCostDescentEstimatorBases(Steppable):
             A = Bp_dCdx
             b = u - u_ff if np.linalg.norm(u) > self.zero_thresh else self.nan(u.shape)
 
-        return A, b, w_order, u, u_ff, h_order
+        if self.null:
+            A = np.hstack((A, N))
+            w_order.extend(['null%d' %i for i in range(len(N))])
+
+        return A, b, w_order, u, u_ff, h_order, N
 
     def step(self, cost_descents, input, J_RG, J_HG, RG_V_RH):
-        A, b, w_order, u, u_ff, h_order = self._step(cost_descents, input, J_RG, J_HG, RG_V_RH)
-        return {'A': A, 'b': b, 'w_order':w_order, 'u':u, 'u_ff':u_ff, 'h_order': h_order}
+        A, b, w_order, u, u_ff, h_order, N = self._step(cost_descents, input, J_RG, J_HG, RG_V_RH)
+        return {'A': A, 'b': b, 'w_order':w_order, 'u':u, 'u_ff':u_ff, 'h_order': h_order, "null":N}
 
     def nan(self, shape):
         a = np.empty(shape)
